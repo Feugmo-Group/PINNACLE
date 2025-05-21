@@ -1,0 +1,76 @@
+
+# Arch settings
+arch:
+  fully_connected:
+    # Architecture for both networks
+    layer_size: 20 #per paper
+    nr_layers: 5
+
+# Optimizer settings
+optimizer:
+  adam:
+    lr: 1.0e-3
+    betas: [0.9, 0.999]
+    eps: 1.0e-8
+    weight_decay: 0.0
+    amsgrad: False
+
+# Learning rate scheduler
+scheduler:
+  tf_exponential_lr:
+    decay_rate: 0.95
+    decay_steps: 1000
+    
+# Training settings
+training:
+  max_steps: 10000
+  rec_results_freq: 100
+  rec_inference_freq: 1000
+  save_network_freq: 1000
+
+# Batch sizes for different constraints
+batch_size:
+  BC: 1024          # Boundary points per boundary
+  interior: 20000    # Interior points
+  inference: 1024 # Points for inference/visualization
+
+# Custom PDE parameters
+pde:
+  weights:
+    poisson_weight: 1.0    # Weight for Poisson equation
+    nernst_weight: 1.0     # Weight for Nernst-Planck equation
+    bc_weight: 1.0        # Weight for boundary conditions
+  physics:
+    D: 1.0          # Diffusion coefficient
+    z: 1.0          # Ion valence
+  Rates:
+    k1: 1.0
+    k2: 1.0
+    k3: 1.0
+    k4: 1.0
+    k5: 1.0
+    ktp: 1.0
+    ko2: 1.0
+
+domain:
+  time:
+    time_scale: 10
+
+
+# Hydra-specific settings
+hydra:
+  run:
+    dir: outputs/torch_model/run${run.id}
+  sweep:
+    dir: outputs/torch_model
+    subdir: run${hydra.job.num}
+  job:
+    config:
+      override_dirname:
+        kv_sep: '='
+        item_sep: ','
+        exclude_keys: ['hydra.run.dir']
+
+# Add a default run ID that can be overridden
+run:
+  id: 1  # Default run ID, can be overridden via command line
