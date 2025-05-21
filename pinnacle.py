@@ -268,7 +268,7 @@ class PINNACLE():
 
         #ko2 computation
 
-        ko2 = self.ko2*np.exp(self.alphao2*2*self.F*1/(self.R*self.T)*(self.phi_ext-self.phi_o2) #Whatever the fuck phi_o2 even is
+        ko2 = self.ko2*np.exp(self.alphao2*2*self.F*1/(self.R*self.T)*(self.phi_ext-self.phi_o2)) #Whatever the fuck phi_o2 even is
                               
         return k1, k2, k3, k4, k5, ktp, ko2
 
