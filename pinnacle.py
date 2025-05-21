@@ -77,9 +77,16 @@ class PINNACLE():
         self.k5 = cfg.pde.rates.k5
         self.ktp = cfg.pde.rates.ktp
         self.ko2 = cfg.pde.rates.o2
-        #add self.alphas
-        #add self.time_scale
-        #add self.L_initial
+        self.alpha1 = cfg.pde.rates.o2
+        self.alpha2 = cfg.pde.rates.o2
+        self.alpha3= cfg.pde.rates.o2
+        self.alpha4 = cfg.pde.rates.o2
+        self.alpha5 = cfg.pde.rates.o2
+        self.alphatp = cfg.pde.rates.o2
+        self.alphao2 = cfg.pde.rates.o2
+        self.delta3 = cfg.pde.chemistry.delta3
+        self.time_sclae = cfg.domain.time.time_scale
+        self.L_initial = cfg.domain.initial.L_initial
         
 
 
@@ -226,18 +233,45 @@ class PINNACLE():
         x_mf = torch.zeros(self.cfg.batch_size.rate, 1, device=self.device)
         t_mf = torch.rand(self.cfg.batch_size.rate,1,device=self.device) * self.time_scale
 
-        inputs = torch.cat([x_mf,t_mf],dim=1)
-        u_mf = self.potential_net(inputs)
+        inputs_mf = torch.cat([x_mf,t_mf],dim=1)
+        u_mf = self.potential_net(inputs_mf)
          
         #k1 computation
         k1 = self.k1 * np.exp(self.alpha_1*3*self.F*self.R*self.T*u_mf)
 
         #k2 computation
-        k2 = self.k2 * np.exp(self.alpha_2*3*self.F*self.R*self.T*u_mf)
+        k2 = self.k2 * np.exp(self.alpha_2*2*self.F*1/(self.R*self.T)*u_mf)
 
         #predict the potential on the f/s(x=L) boundary
 
-        x_fs = 
+        x_fs = torch.ones_like(self.cfg.batch_size.rate,1,device=self.device) * self.L_initial #Need to figure out this whole recursive L thing
         t_fs = torch.rand(self.cfg.batch_size.rate,1,device=self.device) * self.time_scale #Might be redundant
+
+        inputs_fs = torch.cat([x_fs,t_fs],dim=1)
+        u_fs = self.potential_net(inputs_fs)
+
+        #k3 computation
+        k3 = self.k3 * np.exp(self.alhpa3*(3-self.delta)*self.F*1/(self.R*self.T)*u_fs)
+
+        #k4 computation
+        k4 = self.k4
+
+        #k5 compuation
+        k5 = self.k5 * 1 # FIX THIS RELATED TO QUESTION OF HYDROGEN CONC
+
+
+        #compute the concentration of holes at the f/s interface
+        c_h_fs = self.h_net(inputs_fs)
+    
+        #ktp computation
+        ktp = self.ktp*c_h_fs*np.exp(self.alphatp*self.F*1/(self.R*self.T)*u_fs)
+
+        #ko2 computation
+
+        ko2 = self.ko2*np.exp(self.alphao2*2*self.F*1/(self.R*self.T)*(self.phi_ext-self.phi_o2) #Whatever the fuck phi_o2 even is
+                              
+        return k1, k2, k3, k4, k5, ktp, ko2
+
+
 
 
