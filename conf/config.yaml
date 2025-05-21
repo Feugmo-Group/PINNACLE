@@ -51,10 +51,14 @@ pde:
     k5: 1.0
     ktp: 1.0
     ko2: 1.0
+  Chemistry:
+    delta3: 1.0
 
 domain:
   time:
     time_scale: 10
+  initial:
+    L_initial: 1
 
 
 # Hydra-specific settings
