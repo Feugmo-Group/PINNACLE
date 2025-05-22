@@ -85,13 +85,13 @@ class PINNACLE():
         self.alphatp = cfg.pde.rates.o2
         self.alphao2 = cfg.pde.rates.o2
         self.delta3 = cfg.pde.chemistry.delta3
-        self.time_sclae = cfg.domain.time.time_scale
+        self.time_scale = cfg.domain.time.time_scale
         self.L_initial = cfg.domain.initial.L_initial
         
 
 
         # Optimizer
-        params = list(self.potential_net.parameters()) + list(self.concentration_net.parameters())
+        params = list(self.potential_net.parameters()) + list(self.CV_net.parameters()) + list(self.AV_net.parameters()) + list(self.e_net.parameters()) + list(self.h_net.parameters())
         self.optimizer = optim.Adam(
             params,
             lr=cfg.optimizer.adam.lr,
@@ -183,8 +183,8 @@ class PINNACLE():
         """Compute the residuals due to every PDE"""
         u_pred,cv_pred,av_pred,e_pred,h_pred,cv_t,av_t,e_t,h_t,u_x,cv_x,av_x,e_x,h_x,u_xx = self.compute_gradients()
 
-        #Poission Equation
-        poission_residual = u_xx + (self.F/(self.epsilon*self.epsilonr))((self.z_cv*cv_pred)+(self.z_av*av_pred)+(self.z_e*e_pred)+(self.z_h*h_pred))
+        #Poisson Equation
+        poisson_residual = u_xx + (self.F/(self.epsilon*self.epsilonr))((self.z_cv*cv_pred)+(self.z_av*av_pred)+(self.z_e*e_pred)+(self.z_h*h_pred))
 
         #Fluxes for Nersnt Planck
         flux_cv = -self.D_cv(cv_x + ((self.z_cv*self.F*self.D_cv)/(self.R*self.T))*cv_pred*u_x)
@@ -224,9 +224,13 @@ class PINNACLE():
         e_np_residual = e_t - flux_e_grad
         h_np_residual = h_t - flux_h_grad
 
-        return poission_residual,cv_np_residual,av_np_residual,e_np_residual,h_np_residual,u_pred,cv_pred,av_pred,e_pred,h_pred
+        return poisson_residual,cv_np_residual,av_np_residual,e_np_residual,h_np_residual,u_pred,cv_pred,av_pred,e_pred,h_pred
     
-    def compute_rate_constants(self,x,t):
+
+    def get_L(self,t):
+        pass
+    
+    def compute_rate_constants(self):
 
         #predict the potential on the m/f (x=0) boundary
 
@@ -272,6 +276,41 @@ class PINNACLE():
                               
         return k1, k2, k3, k4, k5, ktp, ko2
 
+    def boundary_loss(self):
+
+        k1,k2,k3,k4,k5,ktp,ko2 = self.compute_rate_constants()
+
+        t = torch.rand(self.cfg.batch_size.BC,1,device=self.device) * self.time_scale
+
+        #m/f Boundary Conditions fllux_cv = k1*cv flux_ov = k2 
+        x_mf = torch.zeros(self.cfg.batch_size.BC, 1, device=self.device)
+        inputs_mf = torch.cat([x_mf,t],dim=1)
+        u_mf_pred = self.potential_net(inputs_mf)
+        u_mf_x = torch.autograd.grad(u_mf_pred,x_mf,grad_outputs=torch.ones_like(u_mf_pred),retain_graph=True,create_graph=True)[0]
+        cv_mf_pred = self.CV_net(inputs_mf)
+        cv_mf_x = torch.autograd.grad(cv_mf_pred,x_mf,grad_outputs=torch.ones_like(cv_mf_pred),retain_graph=True,create_graph=True)[0]
+        flux_cv_mf = -self.D_cv(cv_mf_x + ((self.z_cv*self.F*self.D_cv)/(self.R*self.T))*cv_mf_pred*u_mf_x)
+        av_mf_pred = self.AV_net(inputs_mf)
+        av_mf_x = torch.autograd.grad(av_mf_pred,x_mf,grad_outputs=torch.ones_like(av_mf_pred),retain_graph=True,create_graph=True)[0]
+        flux_av_mf = -self.D_av(av_mf_x + ((self.z_av*self.F*self.D_av)/(self.R*self.T))*av_mf_pred*u_mf_x)
+
+        mf_bc_loss = torch.mean((flux_cv_mf-k1*cv_mf_pred)**2) + torch.mean((flux_av_mf - k2)**2)
 
 
+
+        #f/s Boundary Conditions fllux_cv = -k3 flux_ov = k4*c_ov 
+        x_fs = torch.ones(self.cfg.batch_size.BC, 1, device=self.device) * self.L_initial #again will have to deal with moving L here
+        inputs_fs = torch.cat([x_fs,t],dim=1)
+        u_fs_pred = self.potential_net(inputs_fs)
+        u_fs_x = torch.autograd.grad(u_fs_pred,x_fs,grad_outputs=torch.ones_like(u_fs_pred),retain_graph=True,create_graph=True)[0]
+        cv_fs_pred = self.CV_net(inputs_fs)
+        cv_fs_x = torch.autograd.grad(cv_fs_pred,x_fs,grad_outputs=torch.ones_like(cv_fs_pred),retain_graph=True,create_graph=True)[0]
+        flux_cv_fs = -self.D_cv(cv_fs_x + ((self.z_cv*self.F*self.D_cv)/(self.R*self.T))*cv_fs_pred*u_fs_x)
+        av_fs_pred = self.AV_net(inputs_fs)
+        av_fs_x = torch.autograd.grad(av_fs_pred,x_fs,grad_outputs=torch.ones_like(av_fs_pred),retain_graph=True,create_graph=True)[0]
+        flux_av_fs = -self.D_av(av_fs_x + ((self.z_av*self.F*self.D_av)/(self.R*self.T))*av_fs_pred*u_fs_x)
+
+        fs_bc_loss = torch.mean( (flux_cv_fs + k3)**2 ) + torch.mean( (flux_cv_fs + k3)**2 )   
+
+        
 
