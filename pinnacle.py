@@ -42,7 +42,7 @@ class FFN(nn.Module):
                 
         return self.output_layer(x)
     
-class PINNACLE():
+class Pinnacle():
     def __init__(self,cfg):
         self.cfg = cfg
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -227,7 +227,7 @@ class PINNACLE():
         return poisson_residual,cv_np_residual,av_np_residual,e_np_residual,h_np_residual,u_pred,cv_pred,av_pred,e_pred,h_pred
     
 
-    def get_L(self,t):
+    def get_L(self, t):
         pass
     
     def compute_rate_constants(self):
@@ -263,7 +263,6 @@ class PINNACLE():
         #k5 compuation
         k5 = self.k5 * 1 # FIX THIS RELATED TO QUESTION OF HYDROGEN CONC
 
-
         #compute the concentration of holes at the f/s interface
         c_h_fs = self.h_net(inputs_fs)
     
@@ -295,7 +294,6 @@ class PINNACLE():
         flux_av_mf = -self.D_av(av_mf_x + ((self.z_av*self.F*self.D_av)/(self.R*self.T))*av_mf_pred*u_mf_x)
 
         mf_bc_loss = torch.mean((flux_cv_mf-k1*cv_mf_pred)**2) + torch.mean((flux_av_mf - k2)**2)
-
 
 
         #f/s Boundary Conditions fllux_cv = -k3 flux_ov = k4*c_ov 
