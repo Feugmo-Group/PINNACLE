@@ -55,33 +55,84 @@ class Pinnacle():
         self.h_net = FFN(cfg.arch.fully_connected, input_dim=2, output_dim=1).to(self.device) #Hole
         
 
-        # Physics parameters
+        # Physics constants
+        self.F = cfg.pde.physics.F
+        self.R = cfg.pde.physics.R
+        self.T = cfg.pde.physics.T
+        self.k_B = cfg.pde.physics.k_B
+        self.eps0 = cfg.pde.physics.eps0
+
+        # Diffusion coefficients
         self.D_cv = cfg.pde.physics.D_cv
         self.D_av = cfg.pde.physics.D_av
         self.D_h = cfg.pde.physics.D_h
+
+        # Mobility coefficients
+        self.U_cv = cfg.pde.physics.U_cv
+        self.U_av = cfg.pde.physics.U_av
+        self.U_h = cfg.pde.physics.U_h
+
+        # Species charges
         self.z_cv = cfg.pde.physics.z_cv
         self.z_av = cfg.pde.physics.z_av
         self.z_h = cfg.pde.physics.z_h
-        self.F = cfg.pde.physics.F
-        self.R = cfg.pde.physics.R
-        self.T = cfg.pde.physics.T 
-        self.epsilon = cfg.pde.physics.epsilon
-        self.epsilonr = cfg.pde.physics.epsilonr
-        self.k1 = cfg.pde.rates.k1
-        self.k2 = cfg.pde.rates.k2
-        self.k3 = cfg.pde.rates.k3
-        self.k4 = cfg.pde.rates.k4
-        self.k5 = cfg.pde.rates.k5
-        self.ktp = cfg.pde.rates.ktp
-        self.ko2 = cfg.pde.rates.o2
-        self.alpha1 = cfg.pde.rates.o2
-        self.alpha2 = cfg.pde.rates.o2
-        self.alpha3= cfg.pde.rates.o2
-        self.alpha4 = cfg.pde.rates.o2
-        self.alpha5 = cfg.pde.rates.o2
-        self.alphatp = cfg.pde.rates.o2
-        self.alphao2 = cfg.pde.rates.o2
+
+        # Permittivities
+        self.epsilonf = cfg.pde.physics.epsilonf
+        self.eps_film = cfg.pde.physics.eps_film
+        self.eps_Ddl = cfg.pde.physics.eps_Ddl
+        self.eps_dl = cfg.pde.physics.eps_dl
+        self.eps_sol = cfg.pde.physics.eps_sol
+
+        # Semiconductor properties
+        self.c_h0 = cfg.pde.physics.c_h0
+        self.c_e0 = cfg.pde.physics.c_e0
+        self.tau = cfg.pde.physics.tau
+        self.Nc = cfg.pde.physics.Nc
+        self.Nv = cfg.pde.physics.Nv
+        self.mu_e0 = cfg.pde.physics.mu_e0
+        self.Ec0 = cfg.pde.physics.Ec0
+        self.Ev0 = cfg.pde.physics.Ev0
+
+        # Solution properties
+        self.c_H = cfg.pde.physics.c_H
+        self.pH = cfg.pde.physics.pH
+        self.Omega = cfg.pde.physics.Omega
+
+        # Standard rate constants
+        self.k1_0 = cfg.pde.rates.k1_0
+        self.k2_0 = cfg.pde.rates.k2_0
+        self.k3_0 = cfg.pde.rates.k3_0
+        self.k4_0 = cfg.pde.rates.k4_0
+        self.k5_0 = cfg.pde.rates.k5_0
+        self.ktp_0 = cfg.pde.rates.ktp_0
+        self.ko2_0 = cfg.pde.rates.ko2_0
+
+        # Charge transfer coefficients
+        self.alpha_cv = cfg.pde.rates.alpha_cv
+        self.alpha_av = cfg.pde.rates.alpha_av
+        self.beta_cv = cfg.pde.rates.beta_cv
+        self.beta_av = cfg.pde.rates.beta_av
+        self.alpha_tp = cfg.pde.rates.alpha_tp
+        self.a_par = cfg.pde.rates.a_par
+
+        # Derived parameters
+        self.a_cv = cfg.pde.rates.a_cv
+        self.a_av = cfg.pde.rates.a_av
+        self.b_cv = cfg.pde.rates.b_cv
+
+        # Equilibrium potentials
+        self.phi_O2_eq = cfg.pde.rates.phi_O2_eq
+
+        # Geometric parameters
+        self.d_Ddl = cfg.pde.geometry.d_Ddl
+        self.d_dl = cfg.pde.geometry.d_dl
+        self.L_cell = cfg.pde.geometry.L_cell
+
+        # Chemistry
         self.delta3 = cfg.pde.chemistry.delta3
+
+        # Domain
         self.time_scale = cfg.domain.time.time_scale
         self.L_initial = cfg.domain.initial.L_initial
         
@@ -182,14 +233,14 @@ class Pinnacle():
     #enforce alll the pde losses
     def pde_residuals(self,x,t):
         """Compute the residuals due to every PDE"""
-        u_pred,cv_pred,av_pred,e_pred,h_pred,cv_t,av_t,e_t,h_t,u_x,cv_x,av_x,e_x,h_x,u_xx,cv_xx,av_xx,h_xx = self.compute_gradients()
+        u_pred,cv_pred,av_pred,h_pred,cv_t,av_t,e_t,h_t,u_x,cv_x,av_x,e_x,h_x,u_xx,cv_xx,av_xx,h_xx = self.compute_gradients(x,t)
 
         #Convection-Diffusion Formulation of Nersnt-Planck 
         cd_cv_residual = cv_t + (-self.D_cv*cv_xx) + (-self.U_cv*u_x*cv_x) - (self.U_cv*cv_pred*u_xx)
 
         cd_av_residual = av_t + (-self.D_av*av_xx) + (-self.U_av*u_x*av_x) - (self.U_av*av_pred*u_xx)
 
-        cd_h_residual = h_t + (-self.D_h*cv_xx) + (-self.F*self.D_h*(1/self.R*self.T)*u_x*h_x) - (self.F*self.D_h*(1/self.R*self.T)*h_pred*u_xx) #Different from ion convection-diffusion, we are ignoring recombination terms as a simpllifying assumtpion
+        cd_h_residual = h_t + (-self.D_h*h_xx) + (-self.F*self.D_h*(1/self.R*self.T)*u_x*h_x) - (self.F*self.D_h*(1/self.R*self.T)*h_pred*u_xx) #Different from ion convection-diffusion, we are ignoring recombination terms as a simpllifying assumtpion
 
         #Poisson Residual Calculation
 
