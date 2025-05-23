@@ -32,6 +32,7 @@ batch_size:
   BC: 1024 # Boundary points per boundary
   interior: 20000 # Interior points
   inference: 1024 # Points for inference/visualization
+  IC: 1024
   rate: 512 # For rate constant computation
 
 # Custom PDE parameters
@@ -48,6 +49,7 @@ pde:
     T: 293 # Temperature [K]
     k_B: 1.3806e-23 # Boltzmann constant [J/K]
     eps0: 8.85e-12 # Vacuum permittivity [F/m]
+    E_ext: 0.0  # External applied potential [V] - placeholder for now
     
     # Diffusion coefficients [m²/s]
     D_cv: 1.0e-21
