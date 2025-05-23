@@ -258,50 +258,44 @@ class Pinnacle():
         return self.E_ext  # For now just return constant value
     
     def compute_rate_constants(self):
-
-        #predict the potential on the m/f (x=0) boundary
-
+        # Predict the potential on the m/f (x=0) boundary
         x_mf = torch.zeros(self.cfg.batch_size.rate, 1, device=self.device)
-        t_mf = torch.rand(self.cfg.batch_size.rate,1,device=self.device) * self.time_scale
-
-        inputs_mf = torch.cat([x_mf,t_mf],dim=1)
+        t_mf = torch.rand(self.cfg.batch_size.rate, 1, device=self.device) * self.time_scale
+        inputs_mf = torch.cat([x_mf, t_mf], dim=1)
         u_mf = self.potential_net(inputs_mf)
-         
-        #k1 computation
-        k1 = self.k1 * np.exp(self.alpha_1*3*self.F*self.R*self.T*u_mf)
-
-        #k2 computation
-        k2 = self.k2 * np.exp(self.alpha_2*2*self.F*1/(self.R*self.T)*u_mf)
-
-        #predict the potential on the f/s(x=L) boundary
-
-        x_fs = torch.ones_like(self.cfg.batch_size.rate,1,device=self.device) * self.L_initial #Need to figure out this whole recursive L thing
-        t_fs = torch.rand(self.cfg.batch_size.rate,1,device=self.device) * self.time_scale #Might be redundant
-
-        inputs_fs = torch.cat([x_fs,t_fs],dim=1)
+        
+        # k1 computation: k1 = k1_0 * exp(alpha_cv * 3F/(RT) * φ_mf)
+        k1 = self.k1_0 * torch.exp(self.alpha_cv * 3 * self.F / (self.R * self.T) * u_mf)
+        
+        # k2 computation: k2 = k2_0 * exp(alpha_av * 2F/(RT) * φ_mf)  
+        k2 = self.k2_0 * torch.exp(self.alpha_av * 2 * self.F / (self.R * self.T) * u_mf)
+        
+        # Predict the potential on the f/s (x=L) boundary
+        x_fs = torch.ones(self.cfg.batch_size.rate, 1, device=self.device) * self.L_initial
+        t_fs = torch.rand(self.cfg.batch_size.rate, 1, device=self.device) * self.time_scale
+        inputs_fs = torch.cat([x_fs, t_fs], dim=1)
         u_fs = self.potential_net(inputs_fs)
-
-        #k3 computation
-        k3 = self.k3 * np.exp(self.alhpa3*(3-self.delta)*self.F*1/(self.R*self.T)*u_fs)
-
-        #k4 computation
-        k4 = self.k4
-
-        #k5 compuation
-        k5 = self.k5 * 1 # FIX THIS RELATED TO QUESTION OF HYDROGEN CONC
-
-        #compute the concentration of holes at the f/s interface
+        
+        # k3 computation: k3 = k3_0 * exp(beta_cv * (3-δ)F/(RT) * φ_fs)
+        k3 = self.k3_0 * torch.exp(self.beta_cv * (3 - self.delta3) * self.F / (self.R * self.T) * u_fs)
+        
+        # k4 computation: chemical reaction, potential independent
+        k4 = self.k4_0
+        
+        # k5 computation: k5 = k5_0 * (c_H+)^n, assuming n=1
+        k5 = self.k5_0 * self.c_H
+        
+        # Compute the concentration of holes at the f/s interface
         c_h_fs = self.h_net(inputs_fs)
-    
-        #ktp computation
-        ktp = self.ktp*c_h_fs*np.exp(self.alphatp*self.F*1/(self.R*self.T)*u_fs)
-
-        #ko2 computation
-
-        ko2 = self.ko2*np.exp(self.alphao2*2*self.F*1/(self.R*self.T)*(self.phi_ext-self.phi_o2)) #Whatever the fuck phi_o2 even is
-                              
+        
+        # ktp computation: ktp = ktp_0 * c_h * exp(alpha_tp * F/(RT) * φ_fs)
+        ktp = self.ktp_0 * c_h_fs * torch.exp(self.alpha_tp * self.F / (self.R * self.T) * u_fs)
+        
+        # ko2 computation: ko2 = ko2_0 * exp(a_par * 2F/(RT) * (E_ext - φ_O2_eq))
+        ko2 = self.ko2_0 * torch.exp(self.a_par * 2 * self.F / (self.R * self.T) * (self.E_ext - self.phi_O2_eq))
+        
         return k1, k2, k3, k4, k5, ktp, ko2
-    
+        
 
     def initial_condition_loss(self):
         
@@ -341,7 +335,7 @@ class Pinnacle():
 
         return total_initial_loss
     
-    
+
     def boundary_loss(self):
 
         k1,k2,k3,k4,k5,ktp,ko2 = self.compute_rate_constants()
