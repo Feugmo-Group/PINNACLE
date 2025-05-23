@@ -61,6 +61,7 @@ class Pinnacle():
         self.T = cfg.pde.physics.T
         self.k_B = cfg.pde.physics.k_B
         self.eps0 = cfg.pde.physics.eps0
+        self.E_ext = cfg.pde.physics.E_ext
 
         # Diffusion coefficients
         self.D_cv = cfg.pde.physics.D_cv
@@ -250,6 +251,11 @@ class Pinnacle():
 
     def get_L(self, t):
         pass
+
+    def get_E_ext(self, t):
+        """Dummy function for external potential - will implement sweeping later"""
+    
+        return self.E_ext  # For now just return constant value
     
     def compute_rate_constants(self):
 
@@ -298,8 +304,44 @@ class Pinnacle():
     
 
     def initial_condition_loss(self):
-        pass
+        
+        t = torch.zeros(self.cfg.batch_size.IC,1,device=self.device)
+        x = torch.rand(self.cfg.batch_size.IC,1,device=self.device) * self.L_initial
+        inputs = torch.cat([x,t],dim=1)
 
+        #Cation Vacancy Initial Conditions
+        cv_initial_pred = self.CV_net(inputs)
+
+        cv_initial_t = torch.autograd.grad(cv_initial_pred,t,grad_outputs=torch.ones_like(cv_initial_pred),retain_graph=True,create_graph=True)[0]
+
+        cv_initial_loss = torch.mean(cv_initial_pred**2) + torch.mean(cv_initial_t**2)
+
+        #Anion Vacancy Initial Conditions
+        av_initial_pred = self.AV_net(inputs)
+
+        av_initial_t = torch.autograd.grad(av_initial_pred,t,grad_outputs=torch.ones_like(av_initial_pred),retain_graph=True,create_graph=True)[0]
+
+        av_initial_loss = torch.mean(av_initial_pred**2) + torch.mean(av_initial_t**2)
+
+        #Poission Initial Conditions
+        u_initial_pred = self.potential_net(inputs)
+
+        u_inital_t = torch.autograd.grad(u_initial_pred,t,grad_outputs=torch.ones_like(av_initial_pred),retain_graph=True,create_graph=True)[0]
+
+        poisson_initial_loss = torch.mean((u_initial_pred-(self.E_ext - 1e7*x))**2) + torch.mean(u_inital_t**2)
+
+        #Hole Initial Conditions
+        h_initial_pred = self.h_net(inputs)
+
+        h_initial_t = torch.autograd.grad(h_initial_pred,t,grad_outputs=torch.ones_like(h_initial_pred),retain_graph=True,create_graph=True)[0]
+
+        h_initial_loss = torch.mean((h_initial_pred-self.c_h0)**2) + torch.mean(h_initial_t**2)       
+
+        total_initial_loss = cv_initial_loss + av_initial_loss + poisson_initial_loss + h_initial_loss
+
+        return total_initial_loss
+    
+    
     def boundary_loss(self):
 
         k1,k2,k3,k4,k5,ktp,ko2 = self.compute_rate_constants()
