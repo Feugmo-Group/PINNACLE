@@ -52,18 +52,15 @@ class Pinnacle():
         #Need to create a seperate net for the concenration of every species of interest
         self.CV_net = FFN(cfg.arch.fully_connected, input_dim=2, output_dim=1).to(self.device) #Cation Vacany
         self.AV_net = FFN(cfg.arch.fully_connected, input_dim=2, output_dim=1).to(self.device) #Anion Vacancy
-        self.e_net = FFN(cfg.arch.fully_connected, input_dim=2, output_dim=1).to(self.device) #Electron
         self.h_net = FFN(cfg.arch.fully_connected, input_dim=2, output_dim=1).to(self.device) #Hole
         
 
         # Physics parameters
         self.D_cv = cfg.pde.physics.D_cv
         self.D_av = cfg.pde.physics.D_av
-        self.D_e = cfg.pde.physics.D_e
         self.D_h = cfg.pde.physics.D_h
         self.z_cv = cfg.pde.physics.z_cv
         self.z_av = cfg.pde.physics.z_av
-        self.z_e = cfg.pde.physics.z_e
         self.z_h = cfg.pde.physics.z_h
         self.F = cfg.pde.physics.F
         self.R = cfg.pde.physics.R
@@ -91,7 +88,7 @@ class Pinnacle():
 
 
         # Optimizer
-        params = list(self.potential_net.parameters()) + list(self.CV_net.parameters()) + list(self.AV_net.parameters()) + list(self.e_net.parameters()) + list(self.h_net.parameters())
+        params = list(self.potential_net.parameters()) + list(self.CV_net.parameters()) + list(self.AV_net.parameters()) + list(self.h_net.parameters())
         self.optimizer = optim.Adam(
             params,
             lr=cfg.optimizer.adam.lr,
@@ -122,7 +119,6 @@ class Pinnacle():
         u_pred = self.potential_net(inputs) #Acts the neural networks on the inputs to compute u and c 
         cv_pred = self.CV_net(inputs)
         av_pred = self.AV_net(inputs)
-        e_pred = self.e_net(inputs)
         h_pred = self.h_net(inputs)
 
 
@@ -134,10 +130,6 @@ class Pinnacle():
 
         av_t = torch.autograd.grad(
             av_pred, t, grad_outputs=torch.ones_like(av_pred), 
-            create_graph=True, retain_graph=True
-        )[0]
-        e_t = torch.autograd.grad(
-            e_pred, t, grad_outputs=torch.ones_like(e_pred), 
             create_graph=True, retain_graph=True
         )[0]
         h_t = torch.autograd.grad(
@@ -160,10 +152,6 @@ class Pinnacle():
             av_pred, x, grad_outputs=torch.ones_like(av_pred), 
             create_graph=True, retain_graph=True
         )[0]
-        e_x = torch.autograd.grad(
-            e_pred, x, grad_outputs=torch.ones_like(e_pred), 
-            create_graph=True, retain_graph=True
-        )[0]
         h_x = torch.autograd.grad(
             h_pred, x, grad_outputs=torch.ones_like(h_pred), 
             create_graph=True, retain_graph=True
@@ -175,57 +163,39 @@ class Pinnacle():
             u_x, x, grad_outputs=torch.ones_like(u_x),
             create_graph=True, retain_graph=True
         )[0]
+        cv_xx = torch.autograd.grad(
+            cv_x, x, grad_outputs=torch.ones_like(cv_x),
+            create_graph=True, retain_graph=True
+        )[0]
+        av_xx = torch.autograd.grad(
+            av_x, x, grad_outputs=torch.ones_like(av_x),
+            create_graph=True, retain_graph=True
+        )[0]
+        h_xx = torch.autograd.grad(
+            h_x, x, grad_outputs=torch.ones_like(h_x),
+            create_graph=True, retain_graph=True
+        )[0]
+        
 
-        return u_pred,cv_pred,av_pred,e_pred,h_pred,cv_t,av_t,e_t,h_t,u_x,cv_x,av_x,e_x,h_x,u_xx
+        return u_pred,cv_pred,av_pred,h_pred,cv_t,av_t,h_t,u_x,cv_x,av_x,h_x,u_xx,cv_xx,av_xx,h_xx
     
     #enforce alll the pde losses
     def pde_residuals(self,x,t):
         """Compute the residuals due to every PDE"""
-        u_pred,cv_pred,av_pred,e_pred,h_pred,cv_t,av_t,e_t,h_t,u_x,cv_x,av_x,e_x,h_x,u_xx = self.compute_gradients()
+        u_pred,cv_pred,av_pred,e_pred,h_pred,cv_t,av_t,e_t,h_t,u_x,cv_x,av_x,e_x,h_x,u_xx,cv_xx,av_xx,h_xx = self.compute_gradients()
 
-        #Poisson Equation
-        poisson_residual = u_xx + (self.F/(self.epsilon*self.epsilonr))((self.z_cv*cv_pred)+(self.z_av*av_pred)+(self.z_e*e_pred)+(self.z_h*h_pred))
+        #Convection-Diffusion Formulation of Nersnt-Planck 
+        cd_cv_residual = cv_t + (-self.D_cv*cv_xx) + (-self.U_cv*u_x*cv_x) - (self.U_cv*cv_pred*u_xx)
 
-        #Fluxes for Nersnt Planck
-        flux_cv = -self.D_cv(cv_x + ((self.z_cv*self.F*self.D_cv)/(self.R*self.T))*cv_pred*u_x)
-        flux_av = -self.D_av(av_x + ((self.z_av*self.F*self.D_av)/(self.R*self.T))*av_pred*u_x)
-        flux_e = -self.D_e(e_x + ((self.z_e*self.F*self.D_e)/(self.R*self.T))*e_pred*u_x)
-        flux_h = -self.D_h(h_x + ((self.z_h*self.F*self.D_h)/(self.R*self.T))*h_pred*u_x)
+        cd_av_residual = av_t + (-self.D_av*av_xx) + (-self.U_av*u_x*av_x) - (self.U_av*av_pred*u_xx)
 
-        # Compute divergence of flux
-        x.requires_grad_(True)
-        t.requires_grad_(True)
+        cd_h_residual = h_t + (-self.D_h*cv_xx) + (-self.F*self.D_h*(1/self.R*self.T)*u_x*h_x) - (self.F*self.D_h*(1/self.R*self.T)*h_pred*u_xx) #Different from ion convection-diffusion, we are ignoring recombination terms as a simpllifying assumtpion
 
-        #Diffrentiate each flux w.r.t x 
-                
-        flux_cv_grad = torch.autograd.grad(
-            flux_cv, x, grad_outputs=torch.ones_like(flux_cv),
-            create_graph=True, retain_graph=True
-        )[0]
-                
-        flux_av_grad = torch.autograd.grad(
-            flux_av, x, grad_outputs=torch.ones_like(flux_av),
-            create_graph=True, retain_graph=True
-        )[0]
-                        
-        flux_e_grad = torch.autograd.grad(
-            flux_e, x, grad_outputs=torch.ones_like(flux_e),
-            create_graph=True, retain_graph=True
-        )[0]
-                        
-        flux_h_grad = torch.autograd.grad(
-            flux_h, x, grad_outputs=torch.ones_like(flux_h),
-            create_graph=True, retain_graph=True
-        )[0]
+        #Poisson Residual Calculation
 
-        #Define nernst-planc residual for each species
-        cv_np_residual = cv_t - flux_cv_grad
-        av_np_residual = av_t - flux_av_grad
-        e_np_residual = e_t - flux_e_grad
-        h_np_residual = h_t - flux_h_grad
+        poisson_residual = -self.epsilonf*u_xx - (self.F*(self.z_av*av_pred+self.z_cv*cv_pred))
 
-        return poisson_residual,cv_np_residual,av_np_residual,e_np_residual,h_np_residual,u_pred,cv_pred,av_pred,e_pred,h_pred
-    
+        return cd_cv_residual,cd_av_residual,cd_h_residual,poisson_residual
 
     def get_L(self, t):
         pass
@@ -274,6 +244,10 @@ class Pinnacle():
         ko2 = self.ko2*np.exp(self.alphao2*2*self.F*1/(self.R*self.T)*(self.phi_ext-self.phi_o2)) #Whatever the fuck phi_o2 even is
                               
         return k1, k2, k3, k4, k5, ktp, ko2
+    
+
+    def initial_condition_loss(self):
+        pass
 
     def boundary_loss(self):
 
