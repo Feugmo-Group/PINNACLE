@@ -1,4 +1,3 @@
-
 # Arch settings
 arch:
   fully_connected:
@@ -20,7 +19,7 @@ scheduler:
   tf_exponential_lr:
     decay_rate: 0.95
     decay_steps: 1000
-    
+
 # Training settings
 training:
   max_steps: 10000
@@ -30,36 +29,105 @@ training:
 
 # Batch sizes for different constraints
 batch_size:
-  BC: 1024          # Boundary points per boundary
-  interior: 20000    # Interior points
+  BC: 1024 # Boundary points per boundary
+  interior: 20000 # Interior points
   inference: 1024 # Points for inference/visualization
+  rate: 512 # For rate constant computation
 
 # Custom PDE parameters
 pde:
   weights:
-    poisson_weight: 1.0    # Weight for Poisson equation
-    nernst_weight: 1.0     # Weight for Nernst-Planck equation
-    bc_weight: 1.0        # Weight for boundary conditions
+    poisson_weight: 1.0 # Weight for Poisson equation
+    convdiff_weight: 1.0 # Weight for convection-diffusion equations
+    bc_weight: 1.0 # Weight for boundary conditions
+
   physics:
-    D: 1.0          # Diffusion coefficient
-    z: 1.0          # Ion valence
-  Rates:
-    k1: 1.0
-    k2: 1.0
-    k3: 1.0
-    k4: 1.0
-    k5: 1.0
-    ktp: 1.0
-    ko2: 1.0
-  Chemistry:
-    delta3: 1.0
+    # Physical constants
+    F: 96485 # Faraday constant [C/mol]
+    R: 8.3145 # Gas constant [J/(mol·K)]
+    T: 293 # Temperature [K]
+    k_B: 1.3806e-23 # Boltzmann constant [J/K]
+    eps0: 8.85e-12 # Vacuum permittivity [F/m]
+    
+    # Diffusion coefficients [m²/s]
+    D_cv: 1.0e-21
+    D_av: 1.0e-21
+    D_h: 3.2823e-4
+    
+    # Mobility coefficients [m²/(V·s)]
+    U_cv: -1.0562e-19
+    U_av: 7.9212e-20
+    U_h: 0.013 # mo_h from COMSOL
+    
+    # Species charges
+    z_cv: -2.6667 # -8/3
+    z_av: 2
+    z_h: 1
+    
+    # Permittivities [F/m]
+    epsilonf: 1.239e-10 # 14*eps0
+    eps_film: 1.239e-10 # Same as epsilonf
+    eps_Ddl: 1.77e-11 # 2*eps0
+    eps_dl: 6.947e-10 # 78.5*eps0
+    eps_sol: 6.947e-10 # Same as eps_dl
+    
+    # Semiconductor properties
+    c_h0: 4.1683e-4 # Intrinsic hole concentration [mol/m³]
+    c_e0: 9.5329e-28 # Intrinsic electron concentration [mol/m³]
+    tau: 4.9817e-13 # Recombination time constant [s·mol/m³]
+    Nc: 166.06 # Conduction band density [mol/m³]
+    Nv: 1.6606e5 # Valence band density [mol/m³]
+    mu_e0: 2.4033e-19 # Standard electron chemical potential [J]
+    Ec0: 5.127e-19 # Conduction band edge [J]
+    Ev0: 1.6022e-19 # Valence band edge [J]
+    
+    # Solution properties
+    c_H: 0.01 # Proton concentration [mol/m³]
+    pH: 5
+    
+    # Molar volume
+    Omega: 1.4e-5 # [m³/mol]
+
+  rates:
+    # Standard rate constants
+    k1_0: 4.5e-8 # [m/s]
+    k2_0: 3.6e-6 # [mol/(m²·s)]
+    k3_0: 4.5e-9 # [mol/(m²·s)]
+    k4_0: 2.25e-7 # [m/s]
+    k5_0: 7.65e-9 # [mol/(m²·s)]
+    ktp_0: 4.5e-8 # [-]
+    ko2_0: 0.005 # [m/s]
+    
+    # Charge transfer coefficients
+    alpha_cv: 0.3
+    alpha_av: 0.8
+    beta_cv: 0.1
+    beta_av: 0.8
+    alpha_tp: 0.2
+    a_par: 0.45 # For oxygen evolution
+    
+    # Derived parameters [1/V]
+    a_cv: 23.764 # alpha_cv * 2 * F/(R*T)
+    a_av: 84.493 # alpha_av * 8/3 * F/(R*T)
+    b_cv: 7.9212 # beta_cv * 2 * F/(R*T)
+    
+    # Equilibrium potentials
+    phi_O2_eq: 1.35 # [V]
+
+  geometry:
+    # Geometric parameters [m]
+    d_Ddl: 2.0e-10 # Defect layer thickness
+    d_dl: 5.0e-10 # Double layer thickness
+    L_cell: 1.0e-6 # Cell length
+
+  chemistry:
+    delta3: 1.0 # Chemical parameter
 
 domain:
   time:
     time_scale: 10
   initial:
-    L_initial: 1
-
+    L_initial: 1.0e-10 # Initial film thickness [m]
 
 # Hydra-specific settings
 hydra:
@@ -77,4 +145,4 @@ hydra:
 
 # Add a default run ID that can be overridden
 run:
-  id: 1  # Default run ID, can be overridden via command line
+  id: 1 # Default run ID, can be overridden via command line
