@@ -158,15 +158,14 @@ class Pinnacle():
         )
 
         # Loss weights
-        self.poisson_weight = cfg.pnp.weights.poisson_weight
-        self.nernst_weight = cfg.pnp.weights.nernst_weight
-        self.bc_weight = cfg.pnp.weights.bc_weight
+        #self.poisson_weight = cfg.pde.weights.poisson_weight
+        #self.nernst_weight = cfg.pde.weights.nernst_weight
+        #self.bc_weight = cfg.pde.weights.bc_weight
 
     def compute_gradients(self, x, t):
         """Compute the gradients of potential and concentration."""
         x.requires_grad_(True)
         t.requires_grad_(True)
-
         # Compute Forward pass
         inputs = torch.cat([x, t], dim=1)  # puts all the input values together into one big list
         u_pred = self.potential_net(inputs)  # Acts the neural networks on the inputs to compute u and c
@@ -249,8 +248,7 @@ class Pinnacle():
 
     def L_loss(self):
         """Enforce dL/dt = Ω(k2 - k5)"""
-        t = torch.rand(self.cfg.batch_size.film_thickness,1,device=self.device) * self.time_scale
-        t.requires_grad(True)
+        t = torch.rand(self.cfg.batch_size.film_thickness,1,device=self.device,requires_grad=True) * self.time_scale
 
         L_pred = self.L_net(t)
 
@@ -262,7 +260,6 @@ class Pinnacle():
         dL_dt_physics = self.Omega * (k2 - k5)
 
         return torch.mean( (dL_dt - dL_dt_physics)**2 )
-
 
 
     def get_E_ext(self, t):
@@ -310,7 +307,7 @@ class Pinnacle():
         ktp = self.ktp_0 * c_h_fs * torch.exp(self.alpha_tp * self.F / (self.R * self.T) * u_fs)
 
         # ko2 computation: ko2 = ko2_0 * exp(a_par * 2F/(RT) * (E_ext - φ_O2_eq))
-        ko2 = self.ko2_0 * torch.exp(self.a_par * 2 * self.F / (self.R * self.T) * (self.E_ext - self.phi_O2_eq))
+        ko2 = self.ko2_0 * np.exp(self.a_par * 2 * self.F / (self.R * self.T) * (self.E_ext - self.phi_O2_eq))
 
         return k1, k2, k3, k4, k5, ktp, ko2
 
@@ -318,6 +315,7 @@ class Pinnacle():
 
         t = torch.zeros(self.cfg.batch_size.IC, 1, device=self.device)
         x = torch.rand(self.cfg.batch_size.IC, 1, device=self.device) * self.L_initial
+        t.requires_grad = True
         inputs = torch.cat([x, t], dim=1)
 
         #Initial Conditions for film_thickness
@@ -362,16 +360,19 @@ class Pinnacle():
         k1, k2, k3, k4, k5, ktp, ko2 = self.compute_rate_constants()
 
         #initialize the time inputs
-        t = torch.rand(self.cfg.batch_size.BC, 1, device=self.device) * self.time_scale
+        t = torch.rand(self.cfg.batch_size.BC, 1, device=self.device,requires_grad=True) * self.time_scale
         
         #m/f interface conditions
-        x_mf = torch.zeros(self.cfg.batch_size.BC, 1, device=self.device)
+        x_mf = torch.zeros(self.cfg.batch_size.BC, 1, device=self.device,requires_grad=True)
         inputs_mf = torch.cat([x_mf,t],dim=1)
+
+        #Predicting the potential at m/f interface on the film side
+        u_pred_mf = self.potential_net(inputs_mf)
+        u_pred_mf_x = torch.autograd.grad(u_pred_mf, x_mf, grad_outputs=torch.ones_like(u_pred_mf), retain_graph=True, create_graph=True)[0]
+
         #cv at m/f conditions
         cv_pred_mf = self.CV_net(inputs_mf)
-        u_pred_mf = self.potential_net(inputs_mf)
         cv_pred_mf_x = torch.autograd.grad(cv_pred_mf, x_mf, grad_outputs=torch.ones_like(cv_pred_mf), retain_graph=True, create_graph=True)[0] 
-        u_pred_mf_x = torch.autograd.grad(u_pred_mf, x_mf, grad_outputs=torch.ones_like(u_pred_mf), retain_graph=True, create_graph=True)[0]
 
         q1 = self.k1_0* torch.exp(self.alpha_cv*(self.E_ext-u_pred_mf)) + self.U_cv*u_pred_mf_x  - (self.Omega*(k2-k5)) # have the option to find d(x,t) via auto diff or by computing w.r.t rate constants, this wll need to be tuned
         cv_mf_loss = torch.mean( (-self.D_cv*cv_pred_mf_x +q1*cv_pred_mf)**2)
@@ -380,7 +381,7 @@ class Pinnacle():
         av_pred_mf = self.AV_net(inputs_mf)
         av_pred_mf_x = torch.autograd.grad(av_pred_mf, x_mf, grad_outputs=torch.ones_like(av_pred_mf), retain_graph=True, create_graph=True)[0] 
 
-        g2 = (4/3)*self.k2_0*torch.exp(self.alpha_av(self.E_ext-u_pred_mf))
+        g2 = (4/3)*self.k2_0*torch.exp(self.alpha_av*(self.E_ext-u_pred_mf))
         q2 = -1*self.U_av*u_pred_mf_x - (self.Omega*(k2-k5))
 
         av_mf_loss = torch.mean( (self.D_av*av_pred_mf_x -g2 +q2*av_pred_mf)**2 )
@@ -392,9 +393,172 @@ class Pinnacle():
         #Predict L to compute the location of the f/s interface
         L_pred = self.L_net(t)
 
-    
         #f/s interface conditions
-        x_fs = torch.ones(self.cfg.batch_size.BC,1,device=self.device) * L_pred
+        x_fs = torch.ones(self.cfg.batch_size.BC,1,device=self.device,requires_grad=True) * L_pred
+        inputs_fs = torch.cat([x_fs,t],dim=1)
         
+        #Predicting the potential at f/s
+        u_pred_fs = self.potential_net(inputs_fs)
+        u_pred_fs_x = torch.autograd.grad(u_pred_fs, x_fs, grad_outputs=torch.ones_like(u_pred_fs), retain_graph=True, create_graph=True)[0]
+
+        #cv at f/s conditions
+        cv_pred_fs = self.CV_net(inputs_fs)
+        cv_pred_fs_x = torch.autograd.grad(cv_pred_fs, x_fs, grad_outputs=torch.ones_like(cv_pred_fs), retain_graph=True, create_graph=True)[0] 
+
+        g4 = -1*self.k3_0*torch.exp(self.beta_cv*u_pred_fs)
+        q4 = -1*self.U_cv*u_pred_fs_x
+        
+        cv_fs_loss = torch.mean((-self.D_cv*cv_pred_fs_x -g4 + q4*cv_pred_fs)**2)
+
+        #av at f/s conditions
+        av_pred_fs = self.AV_net(inputs_fs)
+        av_pred_fs_x = torch.autograd.grad(av_pred_fs, x_fs, grad_outputs=torch.ones_like(av_pred_fs), retain_graph=True, create_graph=True)[0] 
+
+        q5 = -1*(self.k4_0*torch.exp(self.alpha_av*u_pred_fs) + self.U_av*u_pred_fs_x)
+        
+        av_fs_loss = torch.mean((-self.D_av*av_pred_fs_x + q5*av_pred_fs)**2)
+
+        #hole at f/s conditions
+        h_pred_fs = self.h_net(inputs_fs)
+        h_pred_fs_x = torch.autograd.grad(h_pred_fs, x_fs, grad_outputs=torch.ones_like(h_pred_fs), retain_graph=True, create_graph=True)[0] 
+
+        hole_threshold = 1e-9
+        mask = h_pred_fs > hole_threshold
+        g6 = torch.zeros_like(h_pred_fs)
+        q6 = torch.where(mask, (self.ktp_0 + (self.F*self.D_h)/(self.R*self.T)*u_pred_fs_x), torch.zeros_like(h_pred_fs))
+
+
+        h_fs_loss = torch.mean((-self.D_h*h_pred_fs_x -g6 +q6*h_pred_fs)**2)
+
+        #Potential at f/s loss
+        g7 = -1*self.eps_Ddl*0 #assuming that the electric field in bulk solution is 0
+        q7 = 0
+        r = -self.d_Ddl*(self.eps_film/self.eps_Ddl)*u_pred_fs_x - self.d_dl*(self.eps_film/self.eps_dl)*u_pred_fs_x
+
+        u_fs_loss = torch.mean((u_pred_fs - r)**2)
+
+        total_BC_loss = cv_mf_loss+av_mf_loss+u_mf_loss+cv_fs_loss+av_fs_loss+u_fs_loss+h_fs_loss
+
+        return total_BC_loss
+
+    def interior_loss(self):
+        """Compute PDE residuals on interior points"""
+
+
+        # Sample interior points
+        t = torch.rand(self.cfg.batch_size.interior, 1, device=self.device) * self.time_scale
+        L_pred = self.L_net(t)
+        x = torch.rand(self.cfg.batch_size.interior, 1, device=self.device) * L_pred 
+        
+        # Compute PDE residuals
+        cd_cv_residual, cd_av_residual, cd_h_residual, poisson_residual = self.pde_residuals(x, t)
+        
+        pde_loss = (torch.mean(cd_cv_residual**2) + 
+                    torch.mean(cd_av_residual**2) + 
+                    torch.mean(cd_h_residual**2) + 
+                    torch.mean(poisson_residual**2))
+    
+        return pde_loss
+    
+
+    def total_loss(self):
+        """Compute total weighted loss"""
+        interior_loss = self.interior_loss()
+        ic_loss = self.initial_condition_loss()
+        bc_loss = self.boundary_loss()
+        L_physics_loss = self.L_loss()
+        
+        # Apply weights
+        total_loss = (interior_loss + 
+                    bc_loss + 
+                    ic_loss + 
+                    L_physics_loss)
+        
+        return total_loss, interior_loss, ic_loss, bc_loss,L_physics_loss
+
+    def train_step(self):
+            """Perform one training step."""
+            self.optimizer.zero_grad()
+            loss,interior_loss,ic_loss,bc_loss,L_physics_loss = self.total_loss()
+            loss.backward() 
+            self.optimizer.step()
+            self.scheduler.step()
+
+            return loss.item(), interior_loss.item(), ic_loss.item(), bc_loss.item(), L_physics_loss.item()
+    
+    def train(self):
+        """Train the model."""
+        losses = []
+        poisson_losses = []
+        cv_losses = []
+        av_losses= []
+        h_loss = []
+        thickness_losses = []
+        interior_losses = []
+        ic_losses = []
+        bc_losses = []
+        
+        # Training loop
+        for step in range(self.cfg.training.max_steps):
+            loss, interior_loss, ic_loss, bc_loss,thickness_loss = self.train_step()
+            losses.append(loss)
+            interior_losses.append(interior_loss)
+            ic_losses.append(ic_loss)
+            thickness_losses.append(thickness_loss)
+            bc_losses.append(bc_loss)
+            
+            # Print progress
+            if step % self.cfg.training.rec_results_freq == 0:
+                print(f"Step {step}, Loss: {loss:.6f}, Interior: {interior_loss:.6f}, "
+                      f"IC: {ic_loss:.6f}, BC: {bc_loss:.6f}, L_Loss: {thickness_loss:.6f}")
+                
+                # Save if specified
+                if step % self.cfg.training.save_network_freq == 0 and step > 0:
+                    self.save_model(f"outputs/checkpoints/model_step_{step}")
+                    
+        
+        # Final save
+        print(f"Step {step}, Loss: {loss:.6f}, Interior: {interior_loss:.6f},IC: {ic_loss:.6f}, BC: {bc_loss:.6f}, L_Loss: {thickness_loss:.6f}")
+        self.save_model("outputs/checkpoints/model_final")
 
         
+        return losses, interior_losses,ic_losses,bc_losses,thickness_losses
+    
+    def save_model(self, name):
+        """Save model state."""
+        torch.save({
+            'potential_net': self.potential_net.state_dict(),
+            'CV_net': self.CV_net.state_dict(),  # Fix name
+            'AV_net': self.AV_net.state_dict(),  # Add missing nets
+            'h_net': self.h_net.state_dict(),
+            'L_net': self.L_net.state_dict(),
+            'optimizer': self.optimizer.state_dict(),
+        }, f"{name}.pt")
+
+@hydra.main(config_path="conf", config_name="config",version_base=None)
+def main(cfg: DictConfig):
+    print(OmegaConf.to_yaml(cfg))
+    
+    # Create model
+    model = Pinnacle(cfg)
+    
+    # Train
+    losses, interior_losses,ic_losses,bc_losses,thickness_losses = model.train()
+    
+    # Plot losses
+    plt.figure(figsize=(10, 6))
+    plt.semilogy(losses, label='Total Loss')
+    plt.semilogy(interior_losses, label='Interior Loss')
+    plt.semilogy(ic_losses, label='IC Loss')
+    plt.semilogy(bc_losses, label='Boundary Loss')
+    plt.semilogy(thickness_losses, label='Thickness Loss')
+    plt.xlabel('Step')
+    plt.ylabel('Loss')
+    plt.legend()
+    plt.grid(True)
+    plt.savefig("outputs/plots/training_losses.png")
+    plt.close()
+
+if __name__ == "__main__":
+    main()
+
