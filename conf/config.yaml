@@ -34,6 +34,7 @@ batch_size:
   inference: 1024 # Points for inference/visualization
   IC: 1024
   rate: 512 # For rate constant computation
+  film_thickness: 512 #For Predicting the film_thickness
 
 # Custom PDE parameters
 pde:
