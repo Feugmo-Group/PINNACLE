@@ -361,6 +361,40 @@ class Pinnacle():
 
         k1, k2, k3, k4, k5, ktp, ko2 = self.compute_rate_constants()
 
+        #initialize the time inputs
+        t = torch.rand(self.cfg.batch_size.BC, 1, device=self.device) * self.time_scale
+        
+        #m/f interface conditions
+        x_mf = torch.zeros(self.cfg.batch_size.BC, 1, device=self.device)
+        inputs_mf = torch.cat([x_mf,t],dim=1)
+        #cv at m/f conditions
+        cv_pred_mf = self.CV_net(inputs_mf)
+        u_pred_mf = self.potential_net(inputs_mf)
+        cv_pred_mf_x = torch.autograd.grad(cv_pred_mf, x_mf, grad_outputs=torch.ones_like(cv_pred_mf), retain_graph=True, create_graph=True)[0] 
+        u_pred_mf_x = torch.autograd.grad(u_pred_mf, x_mf, grad_outputs=torch.ones_like(u_pred_mf), retain_graph=True, create_graph=True)[0]
+
+        q1 = self.k1_0* torch.exp(self.alpha_cv*(self.E_ext-u_pred_mf)) + self.U_cv*u_pred_mf_x  - (self.Omega*(k2-k5)) # have the option to find d(x,t) via auto diff or by computing w.r.t rate constants, this wll need to be tuned
+        cv_mf_loss = torch.mean( (-self.D_cv*cv_pred_mf_x +q1*cv_pred_mf)**2)
+
+        #av at m/f conditions 
+        av_pred_mf = self.AV_net(inputs_mf)
+        av_pred_mf_x = torch.autograd.grad(av_pred_mf, x_mf, grad_outputs=torch.ones_like(av_pred_mf), retain_graph=True, create_graph=True)[0] 
+
+        g2 = (4/3)*self.k2_0*torch.exp(self.alpha_av(self.E_ext-u_pred_mf))
+        q2 = -1*self.U_av*u_pred_mf_x - (self.Omega*(k2-k5))
+
+        av_mf_loss = torch.mean( (self.D_av*av_pred_mf_x -g2 +q2*av_pred_mf)**2 )
+
+        #potential at m/f conditions
+        g3 = self.eps_Ddl* ( (u_pred_mf-self.E_ext)/self.d_Ddl )
+        u_mf_loss = torch.mean ((-self.epsilonf*u_pred_mf_x -g3 )**2 )
+
+        #Predict L to compute the location of the f/s interface
+        L_pred = self.L_net(t)
+
+    
+        #f/s interface conditions
+        x_fs = torch.ones(self.cfg.batch_size.BC,1,device=self.device) * L_pred
         
 
         
