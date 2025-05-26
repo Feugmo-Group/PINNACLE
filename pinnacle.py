@@ -56,6 +56,7 @@ class Pinnacle():
         self.CV_net = FFN(cfg.arch.fully_connected, input_dim=2, output_dim=1).to(self.device)  # Cation Vacany
         self.AV_net = FFN(cfg.arch.fully_connected, input_dim=2, output_dim=1).to(self.device)  # Anion Vacancy
         self.h_net = FFN(cfg.arch.fully_connected, input_dim=2, output_dim=1).to(self.device)  # Hole
+        self.L_net = FFN(cfg.arch.fully_connected, input_dim=1, output_dim=1).to(self.device)  # Film Thickness
 
         # Physics constants
         self.F = cfg.pde.physics.F
@@ -140,7 +141,7 @@ class Pinnacle():
         self.L_initial = cfg.domain.initial.L_initial
 
         # Optimizer
-        params = list(self.potential_net.parameters()) + list(self.CV_net.parameters()) + list(self.AV_net.parameters()) + list(self.h_net.parameters())
+        params = list(self.potential_net.parameters()) + list(self.CV_net.parameters()) + list(self.AV_net.parameters()) + list(self.h_net.parameters()) + list(self.L_net.parameters())
         self.optimizer = optim.Adam(
             params,
             lr=cfg.optimizer.adam.lr,
@@ -231,7 +232,7 @@ class Pinnacle():
     # enforce alll the pde losses
     def pde_residuals(self, x, t):
         """Compute the residuals due to every PDE"""
-        u_pred, cv_pred, av_pred, h_pred, cv_t, av_t, e_t, h_t, u_x, cv_x, av_x, e_x, h_x, u_xx, cv_xx, av_xx, h_xx = self.compute_gradients(x, t)
+        u_pred, cv_pred, av_pred, h_pred, cv_t, av_t,h_t, u_x, cv_x, av_x,h_x, u_xx, cv_xx, av_xx, h_xx = self.compute_gradients(x, t)
 
         # Convection-Diffusion Formulation of Nersnt-Planck
         cd_cv_residual = cv_t + (-self.D_cv * cv_xx) + (-self.U_cv * u_x * cv_x) - (self.U_cv * cv_pred * u_xx)
@@ -246,8 +247,23 @@ class Pinnacle():
 
         return cd_cv_residual, cd_av_residual, cd_h_residual, poisson_residual
 
-    def get_L(self, t):
-        pass
+    def L_loss(self):
+        """Enforce dL/dt = Ω(k2 - k5)"""
+        t = torch.rand(self.cfg.batch_size.film_thickness,1,device=self.device) * self.time_scale
+        t.requires_grad(True)
+
+        L_pred = self.L_net(t)
+
+        dL_dt = torch.autograd.grad(L_pred,t,grad_outputs=torch.ones_like(L_pred),create_graph=True,retain_graph=True)[0]
+
+        # Get rate constants (using predicted L for f/s boundary)
+        k1, k2, k3, k4, k5, ktp, ko2 = self.compute_rate_constants()
+
+        dL_dt_physics = self.Omega * (k2 - k5)
+
+        return torch.mean( (dL_dt - dL_dt_physics)**2 )
+
+
 
     def get_E_ext(self, t):
         """Dummy function for external potential - will implement sweeping later"""
@@ -255,10 +271,13 @@ class Pinnacle():
         return self.E_ext  # For now just return constant value
 
     def compute_rate_constants(self):
+        
+        #Initialize prediction time range
+        t = torch.rand(self.cfg.batch_size.rate, 1, device=self.device) * self.time_scale
+        
         # Predict the potential on the m/f (x=0) boundary
         x_mf = torch.zeros(self.cfg.batch_size.rate, 1, device=self.device)
-        t_mf = torch.rand(self.cfg.batch_size.rate, 1, device=self.device) * self.time_scale
-        inputs_mf = torch.cat([x_mf, t_mf], dim=1)
+        inputs_mf = torch.cat([x_mf, t], dim=1)
         u_mf = self.potential_net(inputs_mf)
 
         # k1 computation: k1 = k1_0 * exp(alpha_cv * 3F/(RT) * φ_mf)
@@ -267,10 +286,12 @@ class Pinnacle():
         # k2 computation: k2 = k2_0 * exp(alpha_av * 2F/(RT) * φ_mf)
         k2 = self.k2_0 * torch.exp(self.alpha_av * 2 * self.F / (self.R * self.T) * u_mf)
 
+        #Predict L to use in calculation rate constants
+        L_pred = self.L_net(t)
+
         # Predict the potential on the f/s (x=L) boundary
-        x_fs = torch.ones(self.cfg.batch_size.rate, 1, device=self.device) * self.L_initial
-        t_fs = torch.rand(self.cfg.batch_size.rate, 1, device=self.device) * self.time_scale
-        inputs_fs = torch.cat([x_fs, t_fs], dim=1)
+        x_fs = torch.ones(self.cfg.batch_size.rate, 1, device=self.device) * L_pred
+        inputs_fs = torch.cat([x_fs, t], dim=1)
         u_fs = self.potential_net(inputs_fs)
 
         # k3 computation: k3 = k3_0 * exp(beta_cv * (3-δ)F/(RT) * φ_fs)
@@ -298,6 +319,11 @@ class Pinnacle():
         t = torch.zeros(self.cfg.batch_size.IC, 1, device=self.device)
         x = torch.rand(self.cfg.batch_size.IC, 1, device=self.device) * self.L_initial
         inputs = torch.cat([x, t], dim=1)
+
+        #Initial Conditions for film_thickness
+        L_initial_pred = self.L_net(t)
+
+        L_initial_loss = torch.mean( (L_initial_pred - self.L_initial)**2 )
 
         # Cation Vacancy Initial Conditions
         cv_initial_pred = self.CV_net(inputs)
@@ -327,7 +353,7 @@ class Pinnacle():
 
         h_initial_loss = torch.mean((h_initial_pred - self.c_h0) ** 2) + torch.mean(h_initial_t ** 2)
 
-        total_initial_loss = cv_initial_loss + av_initial_loss + poisson_initial_loss + h_initial_loss
+        total_initial_loss = cv_initial_loss + av_initial_loss + poisson_initial_loss + h_initial_loss + L_initial_loss #Might want to add weighting here
 
         return total_initial_loss
 
@@ -335,32 +361,6 @@ class Pinnacle():
 
         k1, k2, k3, k4, k5, ktp, ko2 = self.compute_rate_constants()
 
-        t = torch.rand(self.cfg.batch_size.BC, 1, device=self.device) * self.time_scale
+        
 
-        # m/f Boundary Conditions fllux_cv = k1*cv flux_ov = k2
-        x_mf = torch.zeros(self.cfg.batch_size.BC, 1, device=self.device)
-        inputs_mf = torch.cat([x_mf, t], dim=1)
-        u_mf_pred = self.potential_net(inputs_mf)
-        u_mf_x = torch.autograd.grad(u_mf_pred, x_mf, grad_outputs=torch.ones_like(u_mf_pred), retain_graph=True, create_graph=True)[0]
-        cv_mf_pred = self.CV_net(inputs_mf)
-        cv_mf_x = torch.autograd.grad(cv_mf_pred, x_mf, grad_outputs=torch.ones_like(cv_mf_pred), retain_graph=True, create_graph=True)[0]
-        flux_cv_mf = -self.D_cv(cv_mf_x + ((self.z_cv * self.F * self.D_cv) / (self.R * self.T)) * cv_mf_pred * u_mf_x)
-        av_mf_pred = self.AV_net(inputs_mf)
-        av_mf_x = torch.autograd.grad(av_mf_pred, x_mf, grad_outputs=torch.ones_like(av_mf_pred), retain_graph=True, create_graph=True)[0]
-        flux_av_mf = -self.D_av(av_mf_x + ((self.z_av * self.F * self.D_av) / (self.R * self.T)) * av_mf_pred * u_mf_x)
-
-        mf_bc_loss = torch.mean((flux_cv_mf - k1 * cv_mf_pred) ** 2) + torch.mean((flux_av_mf - k2) ** 2)
-
-        # f/s Boundary Conditions fllux_cv = -k3 flux_ov = k4*c_ov
-        x_fs = torch.ones(self.cfg.batch_size.BC, 1, device=self.device) * self.L_initial  # again will have to deal with moving L here
-        inputs_fs = torch.cat([x_fs, t], dim=1)
-        u_fs_pred = self.potential_net(inputs_fs)
-        u_fs_x = torch.autograd.grad(u_fs_pred, x_fs, grad_outputs=torch.ones_like(u_fs_pred), retain_graph=True, create_graph=True)[0]
-        cv_fs_pred = self.CV_net(inputs_fs)
-        cv_fs_x = torch.autograd.grad(cv_fs_pred, x_fs, grad_outputs=torch.ones_like(cv_fs_pred), retain_graph=True, create_graph=True)[0]
-        flux_cv_fs = -self.D_cv(cv_fs_x + ((self.z_cv * self.F * self.D_cv) / (self.R * self.T)) * cv_fs_pred * u_fs_x)
-        av_fs_pred = self.AV_net(inputs_fs)
-        av_fs_x = torch.autograd.grad(av_fs_pred, x_fs, grad_outputs=torch.ones_like(av_fs_pred), retain_graph=True, create_graph=True)[0]
-        flux_av_fs = -self.D_av(av_fs_x + ((self.z_av * self.F * self.D_av) / (self.R * self.T)) * av_fs_pred * u_fs_x)
-
-        fs_bc_loss = torch.mean((flux_cv_fs + k3) ** 2) + torch.mean((flux_cv_fs + k3) ** 2)
+        
