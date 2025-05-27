@@ -6,7 +6,6 @@ import matplotlib.pyplot as plt
 import hydra
 from omegaconf import DictConfig, OmegaConf
 import os
-import pyvista as pv
 from matplotlib.colors import LinearSegmentedColormap
 from tqdm import tqdm
 import torch.onnx
@@ -321,7 +320,7 @@ class Pinnacle():
         """Compute initial condition losses with individual tracking"""
         
         t = torch.zeros(self.cfg.batch_size.IC, 1, device=self.device)
-        x = torch.rand(self.cfg.batch_size.IC, 1, device=self.device) * self.L_initial
+        x = torch.rand(self.cfg.batch_size.IC, 1, device=self.device) * self.L_initial #Would it be better to change this to L_pred at t=0? vs hard enforcing this?, also we could change the way we are sampling? 
         t.requires_grad_(True)
         inputs = torch.cat([x, t], dim=1)
 
@@ -342,12 +341,12 @@ class Pinnacle():
         # Potential Initial Conditions
         u_initial_pred = self.potential_net(inputs)
         u_initial_t = torch.autograd.grad(u_initial_pred, t, grad_outputs=torch.ones_like(u_initial_pred), retain_graph=True, create_graph=True)[0]
-        poisson_initial_loss = torch.mean((u_initial_pred - (self.E_ext - 1e7 * x)) ** 2) + torch.mean(u_initial_t ** 2)
+        poisson_initial_loss = torch.mean((u_initial_pred - (self.E_ext - 1e7 * x)) ** 2) + torch.mean(u_initial_t ** 2) #This is very stiff! 
 
         # Hole Initial Conditions
         h_initial_pred = self.h_net(inputs)
         h_initial_t = torch.autograd.grad(h_initial_pred, t, grad_outputs=torch.ones_like(h_initial_pred), retain_graph=True, create_graph=True)[0]
-        h_initial_loss = torch.mean((h_initial_pred - self.c_h0) ** 2) + torch.mean(h_initial_t ** 2)
+        h_initial_loss = torch.mean((h_initial_pred - self.c_h0) ** 2) + torch.mean(h_initial_t ** 2)#Also very stiff
 
         total_initial_loss = cv_initial_loss + av_initial_loss + poisson_initial_loss + h_initial_loss + L_initial_loss
 
@@ -374,7 +373,11 @@ class Pinnacle():
         cv_pred_mf = self.CV_net(inputs_mf)
         cv_pred_mf_x = torch.autograd.grad(cv_pred_mf, x_mf, grad_outputs=torch.ones_like(cv_pred_mf), retain_graph=True, create_graph=True)[0] 
 
-        q1 = self.k1_0* torch.exp(self.alpha_cv*(self.E_ext-u_pred_mf)) + self.U_cv*u_pred_mf_x  - (self.Omega*(k2-k5))
+        #Predict L to use in caclulating BC's
+        L_pred = self.L_net(t)
+        L_pred_t = torch.autograd.grad(L_pred,t,grad_outputs=torch.ones_like(L_pred),retain_graph=True,create_graph=True)[0]
+        
+        q1 = self.k1_0* torch.exp(self.alpha_cv*(self.E_ext-u_pred_mf)) + self.U_cv*u_pred_mf_x  - L_pred_t #(self.Omega*(k2-k5)) #analytic enforcing might be stiff
         cv_mf_loss = torch.mean((-self.D_cv*cv_pred_mf_x +q1*cv_pred_mf)**2)
 
         # av at m/f conditions 
@@ -382,7 +385,7 @@ class Pinnacle():
         av_pred_mf_x = torch.autograd.grad(av_pred_mf, x_mf, grad_outputs=torch.ones_like(av_pred_mf), retain_graph=True, create_graph=True)[0] 
 
         g2 = (4/3)*self.k2_0*torch.exp(self.alpha_av*(self.E_ext-u_pred_mf))
-        q2 = -1*self.U_av*u_pred_mf_x - (self.Omega*(k2-k5))
+        q2 = -1*self.U_av*u_pred_mf_x - L_pred_t #(self.Omega*(k2-k5)) #analytic enforcing might be stiff
 
         av_mf_loss = torch.mean((self.D_av*av_pred_mf_x -g2 +q2*av_pred_mf)**2)
 
@@ -390,8 +393,6 @@ class Pinnacle():
         g3 = self.eps_Ddl* ((u_pred_mf-self.E_ext)/self.d_Ddl)
         u_mf_loss = torch.mean((-self.epsilonf*u_pred_mf_x -g3)**2)
 
-        # Predict L to compute the location of the f/s interface
-        L_pred = self.L_net(t)
 
         # f/s interface conditions
         x_fs = torch.ones(self.cfg.batch_size.BC, 1, device=self.device)*L_pred
@@ -425,7 +426,7 @@ class Pinnacle():
         hole_threshold = 1e-9
         mask = h_pred_fs > hole_threshold
         g6 = torch.zeros_like(h_pred_fs)
-        q6 = torch.where(mask, (self.ktp_0 + (self.F*self.D_h)/(self.R*self.T)*u_pred_fs_x), torch.zeros_like(h_pred_fs))
+        q6 = torch.where(mask, (self.ktp_0 + (self.F*self.D_h)/(self.R*self.T)*u_pred_fs_x), torch.zeros_like(h_pred_fs)) #Might also be very stiff, maybe change? 
 
         h_fs_loss = torch.mean((-self.D_h*h_pred_fs_x -g6 +q6*h_pred_fs)**2)
 
