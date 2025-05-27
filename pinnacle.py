@@ -394,7 +394,7 @@ class Pinnacle():
         L_pred = self.L_net(t)
 
         # f/s interface conditions
-        x_fs = L_pred.detach().clone().requires_grad_(True)
+        x_fs = torch.ones(self.cfg.batch_size.BC, 1, device=self.device)*L_pred
         inputs_fs = torch.cat([x_fs, t], dim=1)
         
         # Predicting the potential at f/s
@@ -657,7 +657,7 @@ class Pinnacle():
             plt.colorbar(im4, ax=axes[1,0])
             
             # 5. Film thickness
-            axes[1,1].plot(L_np, t_np, 'k-', linewidth=3)
+            axes[1,1].plot(t_np, L_np, 'k-', linewidth=3)
             axes[1,1].set_xlabel('Time')
             axes[1,1].set_ylabel('Film Thickness')
             axes[1,1].set_title('Film Thickness L(t)')
