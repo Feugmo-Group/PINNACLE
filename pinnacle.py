@@ -9,6 +9,9 @@ import os
 import pyvista as pv
 from matplotlib.colors import LinearSegmentedColormap
 from tqdm import tqdm
+import torch.onnx
+import onnx
+import onnxruntime as ort
 
 class Swish(nn.Module):
     def forward(self, x):
@@ -694,6 +697,60 @@ class Pinnacle():
             'optimizer': self.optimizer.state_dict(),
         }, f"{name}.pt")
 
+
+    # Add this method to your Pinnacle class:
+    def export_to_onnx(self, save_dir=None):
+        """Export all networks to ONNX format"""
+        
+        if save_dir is None:
+            save_dir = f"outputs/onnx_models_{self.cfg.experiment.name}"
+        os.makedirs(save_dir, exist_ok=True)
+        
+        print(f"Exporting networks to ONNX format: {save_dir}")
+        
+        # Move all networks to CPU and set to eval mode
+        networks = {
+            'potential_net': self.potential_net,
+            'CV_net': self.CV_net,
+            'AV_net': self.AV_net,
+            'h_net': self.h_net,
+            'L_net': self.L_net
+        }
+        
+        for name, net in networks.items():
+            net.to('cpu').eval()
+        
+        # Export each network
+        with torch.no_grad():
+            # Networks that take (x,t) input
+            dummy_input_2d = torch.randn(1, 2)
+            for net_name in ['potential_net', 'CV_net', 'AV_net', 'h_net']:
+                print(f"  Exporting {net_name}...")
+                torch.onnx.export(
+                    networks[net_name],
+                    dummy_input_2d,
+                    f"{save_dir}/{net_name}.onnx",
+                    export_params=True,
+                    opset_version=11,
+                    input_names=['input'],
+                    output_names=['output']
+                )
+            
+            # Film thickness network takes only time input
+            dummy_input_1d = torch.randn(1, 1)
+            print("  Exporting L_net...")
+            torch.onnx.export(
+                self.L_net,
+                dummy_input_1d,
+                f"{save_dir}/L_net.onnx",
+                export_params=True,
+                opset_version=11,
+                input_names=['time'],
+                output_names=['thickness']
+            )
+        
+        print(f"✅ All networks exported to {save_dir}/")
+
 @hydra.main(config_path="conf", config_name="config", version_base=None)
 def main(cfg: DictConfig):
     print(OmegaConf.to_yaml(cfg))
@@ -704,11 +761,16 @@ def main(cfg: DictConfig):
     # Train with detailed loss tracking
     os.makedirs(f"outputs/checkpoints_{cfg.experiment.name}",exist_ok=True)
     loss_history = model.train()
+
+    # Export to ONNX after training
+    print("\n" + "="*50)
+    print("Exporting trained model to ONNX...")
+    model.export_to_onnx(save_dir=f"outputs/checkpoints_{cfg.experiment.name}")
+    print("="*50)
     
     # Create comprehensive loss plots
     plot_detailed_losses(loss_history,cfg.experiment.name)
-    torch.onnx.export(model=model,dynamo=True)
-    
+
 def plot_detailed_losses(loss_history,experiment_name):
     """Create comprehensive plots of all loss components"""
     

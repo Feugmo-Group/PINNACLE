@@ -128,12 +128,12 @@ pde:
 
 domain:
   time:
-    time_scale: 10
+    time_scale: 1
   initial:
     L_initial: 1.0e-10 # Initial film thickness [m]
 
 experiment:
-  name: "swish"
+  name: "swish_1s"
 
 # Hydra-specific settings
 hydra:
