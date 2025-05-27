@@ -132,6 +132,9 @@ domain:
   initial:
     L_initial: 1.0e-10 # Initial film thickness [m]
 
+experiment:
+  name: "swish"
+
 # Hydra-specific settings
 hydra:
   run:
