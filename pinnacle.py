@@ -559,8 +559,8 @@ class Pinnacle():
                     self.save_model(f"outputs/checkpoints_{self.cfg.experiment.name}/model_step_{step}")
                     
                     # Visualize if needed
-                    #if step % self.cfg.training.rec_inference_freq == 0:
-                       #self.visualize(step)
+                    if step % self.cfg.training.rec_inference_freq == 0:
+                       self.visualize_predictions(step)
         
         # Final save and print
         final_loss = loss_dict
@@ -574,6 +574,115 @@ class Pinnacle():
         
         return loss_history
     
+    def visualize_predictions(self, step="final"):
+        """Simple function to visualize network predictions across input ranges"""
+        
+        # Create output directory
+        plots_dir = f"outputs/plots_{self.cfg.experiment.name}"
+        os.makedirs(plots_dir, exist_ok=True)
+        
+        with torch.no_grad():
+            # Define input ranges
+            n_spatial = 50
+            n_temporal = 50
+            
+            # Time range (0 to time_scale)
+            t_range = torch.linspace(0, self.time_scale, n_temporal).to(self.device)
+            
+            # Get final film thickness to set spatial range
+            t_final = torch.tensor([[float(self.time_scale)]], device=self.device)
+            L_final = self.L_net(t_final).item()
+            x_range = torch.linspace(0, L_final, n_spatial).to(self.device)
+            
+            print(f"Plotting predictions over:")
+            print(f"  Time range: [0, {self.time_scale:.1f}]")
+            print(f"  Spatial range: [0, {L_final:.2e}]")
+            
+            # Create 2D grid for contour plots
+            T_mesh, X_mesh = torch.meshgrid(t_range, x_range, indexing='ij')
+            inputs_2d = torch.stack([X_mesh.flatten(), T_mesh.flatten()], dim=1)
+            
+            # Get 2D predictions
+            u_2d = self.potential_net(inputs_2d).reshape(n_temporal, n_spatial)
+            cv_2d = self.CV_net(inputs_2d).reshape(n_temporal, n_spatial)
+            av_2d = self.AV_net(inputs_2d).reshape(n_temporal, n_spatial)
+            h_2d = self.h_net(inputs_2d).reshape(n_temporal, n_spatial)
+            
+            # Film thickness evolution
+            t_1d = t_range.unsqueeze(1)
+            L_1d = self.L_net(t_1d).squeeze()
+            
+            # Convert to numpy
+            t_np = t_range.cpu().numpy()
+            x_np = x_range.cpu().numpy()
+            T_np, X_np = np.meshgrid(t_np, x_np, indexing='ij')
+            
+            u_np = u_2d.cpu().numpy()
+            cv_np = cv_2d.cpu().numpy()
+            av_np = av_2d.cpu().numpy()
+            h_np = h_2d.cpu().numpy()
+            L_np = L_1d.cpu().numpy()
+            
+            # Create plots
+            fig, axes = plt.subplots(2, 3, figsize=(18, 12))
+            
+            # 1. Potential field
+            im1 = axes[0,0].contourf(T_np, X_np, u_np, levels=20, cmap='RdBu_r')
+            axes[0,0].set_xlabel('Time')
+            axes[0,0].set_ylabel('Position')
+            axes[0,0].set_title('Potential φ(x,t)')
+            plt.colorbar(im1, ax=axes[0,0])
+            
+            # 2. Cation vacancies
+            im2 = axes[0,1].contourf(T_np, X_np, cv_np, levels=20, cmap='Reds')
+            axes[0,1].set_xlabel('Time')
+            axes[0,1].set_ylabel('Position')
+            axes[0,1].set_title('Cation Vacancies c_cv(x,t)')
+            plt.colorbar(im2, ax=axes[0,1])
+            
+            # 3. Anion vacancies
+            im3 = axes[0,2].contourf(T_np, X_np, av_np, levels=20, cmap='Blues')
+            axes[0,2].set_xlabel('Time')
+            axes[0,2].set_ylabel('Position')
+            axes[0,2].set_title('Anion Vacancies c_av(x,t)')
+            plt.colorbar(im3, ax=axes[0,2])
+            
+            # 4. Holes
+            im4 = axes[1,0].contourf(T_np, X_np, h_np, levels=20, cmap='Purples')
+            axes[1,0].set_xlabel('Time')
+            axes[1,0].set_ylabel('Position')
+            axes[1,0].set_title('Holes c_h(x,t)')
+            plt.colorbar(im4, ax=axes[1,0])
+            
+            # 5. Film thickness
+            axes[1,1].plot(t_np, L_np, 'k-', linewidth=3)
+            axes[1,1].set_xlabel('Time')
+            axes[1,1].set_ylabel('Film Thickness')
+            axes[1,1].set_title('Film Thickness L(t)')
+            axes[1,1].grid(True, alpha=0.3)
+            
+            # Add legends
+            axes[1,2].legend(loc='upper left')
+            
+            plt.suptitle(f'Network Predictions Overview - Step {step}', fontsize=16)
+            plt.tight_layout()
+            
+            # Save plot
+            plot_path = f"{plots_dir}/predictions_overview_step_{step}.png"
+            plt.savefig(plot_path, dpi=300, bbox_inches='tight')
+            plt.close()
+            
+            # Print statistics
+            print(f"\nPrediction Statistics (Step {step}):")
+            print("-" * 40)
+            print(f"Potential:        {u_np.min():.2e} to {u_np.max():.2e} (mean: {u_np.mean():.2e})")
+            print(f"Cation Vacancies: {cv_np.min():.2e} to {cv_np.max():.2e} (mean: {cv_np.mean():.2e})")
+            print(f"Anion Vacancies:  {av_np.min():.2e} to {av_np.max():.2e} (mean: {av_np.mean():.2e})")
+            print(f"Holes:            {h_np.min():.2e} to {h_np.max():.2e} (mean: {h_np.mean():.2e})")
+            print(f"Film Thickness:   {L_np.min():.2e} to {L_np.max():.2e}")
+            
+            # Check for potential issues"""Simple function to visualize network predictions across input ranges"""
+        
     def save_model(self, name):
         """Save model state."""
         torch.save({
@@ -593,11 +702,13 @@ def main(cfg: DictConfig):
     model = Pinnacle(cfg)
     
     # Train with detailed loss tracking
+    os.makedirs(f"outputs/checkpoints_{cfg.experiment.name}",exist_ok=True)
     loss_history = model.train()
     
     # Create comprehensive loss plots
     plot_detailed_losses(loss_history,cfg.experiment.name)
-
+    torch.onnx.export(model=model,dynamo=True)
+    
 def plot_detailed_losses(loss_history,experiment_name):
     """Create comprehensive plots of all loss components"""
     
