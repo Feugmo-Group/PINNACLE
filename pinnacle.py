@@ -573,7 +573,6 @@ class Pinnacle():
         print(f"  Worst PDE: {max([('CV', final_loss['cv_pde']), ('AV', final_loss['av_pde']), ('Hole', final_loss['h_pde']), ('Poisson', final_loss['poisson_pde'])], key=lambda x: x[1])}")
         
         self.save_model(f"outputs/checkpoints_{self.cfg.experiment.name}/model_final")
-        #self.visualize("final")
         
         return loss_history
     
@@ -630,35 +629,35 @@ class Pinnacle():
             fig, axes = plt.subplots(2, 3, figsize=(18, 12))
             
             # 1. Potential field
-            im1 = axes[0,0].contourf(T_np, X_np, u_np, levels=20, cmap='RdBu_r')
-            axes[0,0].set_xlabel('Time')
-            axes[0,0].set_ylabel('Position')
+            im1 = axes[0,0].contourf(X_np, T_np, u_np, levels=20, cmap='RdBu_r')
+            axes[0,0].set_xlabel('Position')
+            axes[0,0].set_ylabel('Time')
             axes[0,0].set_title('Potential φ(x,t)')
             plt.colorbar(im1, ax=axes[0,0])
             
             # 2. Cation vacancies
-            im2 = axes[0,1].contourf(T_np, X_np, cv_np, levels=20, cmap='Reds')
-            axes[0,1].set_xlabel('Time')
-            axes[0,1].set_ylabel('Position')
+            im2 = axes[0,1].contourf(X_np, T_np, cv_np, levels=20, cmap='Reds')
+            axes[0,1].set_xlabel('Position')
+            axes[0,1].set_ylabel('Time')
             axes[0,1].set_title('Cation Vacancies c_cv(x,t)')
             plt.colorbar(im2, ax=axes[0,1])
             
             # 3. Anion vacancies
-            im3 = axes[0,2].contourf(T_np, X_np, av_np, levels=20, cmap='Blues')
-            axes[0,2].set_xlabel('Time')
-            axes[0,2].set_ylabel('Position')
+            im3 = axes[0,2].contourf(X_np, T_np, av_np, levels=20, cmap='Blues')
+            axes[0,2].set_xlabel('Position')
+            axes[0,2].set_ylabel('Time')
             axes[0,2].set_title('Anion Vacancies c_av(x,t)')
             plt.colorbar(im3, ax=axes[0,2])
             
             # 4. Holes
-            im4 = axes[1,0].contourf(T_np, X_np, h_np, levels=20, cmap='Purples')
-            axes[1,0].set_xlabel('Time')
-            axes[1,0].set_ylabel('Position')
+            im4 = axes[1,0].contourf(X_np, T_np, h_np, levels=20, cmap='Purples')
+            axes[1,0].set_xlabel('Position')
+            axes[1,0].set_ylabel('Time')
             axes[1,0].set_title('Holes c_h(x,t)')
             plt.colorbar(im4, ax=axes[1,0])
             
             # 5. Film thickness
-            axes[1,1].plot(t_np, L_np, 'k-', linewidth=3)
+            axes[1,1].plot(L_np, t_np, 'k-', linewidth=3)
             axes[1,1].set_xlabel('Time')
             axes[1,1].set_ylabel('Film Thickness')
             axes[1,1].set_title('Film Thickness L(t)')
