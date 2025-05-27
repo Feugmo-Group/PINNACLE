@@ -698,58 +698,60 @@ class Pinnacle():
         }, f"{name}.pt")
 
 
-    # Add this method to your Pinnacle class:
-    def export_to_onnx(self, save_dir=None):
-        """Export all networks to ONNX format"""
+    def export_for_netron(self):
+        """Export combined model for Netron visualization"""
         
-        if save_dir is None:
-            save_dir = f"outputs/onnx_models_{self.cfg.experiment.name}"
-        os.makedirs(save_dir, exist_ok=True)
+        save_path = f"outputs/pinnacle_architecture.onnx"
+        os.makedirs("outputs", exist_ok=True)
         
-        print(f"Exporting networks to ONNX format: {save_dir}")
+        # Create a simple combined model
+        class CombinedPINNACLE(torch.nn.Module):
+            def __init__(self, potential_net, CV_net, AV_net, h_net, L_net):
+                super().__init__()
+                # Name them clearly for Netron
+                self.potential_network = potential_net
+                self.cation_vacancy_network = CV_net
+                self.anion_vacancy_network = AV_net
+                self.hole_network = h_net
+                self.film_thickness_network = L_net
+                
+            def forward(self, x, t):
+                # Combine x,t for spatial-temporal networks
+                xt_input = torch.cat([x, t], dim=1)
+                
+                # Get all predictions
+                potential = self.potential_network(xt_input)
+                cv_conc = self.cation_vacancy_network(xt_input)
+                av_conc = self.anion_vacancy_network(xt_input)
+                h_conc = self.hole_network(xt_input)
+                thickness = self.film_thickness_network(t)
+                
+                return potential, cv_conc, av_conc, h_conc, thickness
         
-        # Move all networks to CPU and set to eval mode
-        networks = {
-            'potential_net': self.potential_net,
-            'CV_net': self.CV_net,
-            'AV_net': self.AV_net,
-            'h_net': self.h_net,
-            'L_net': self.L_net
-        }
+        # Move to CPU and eval mode
+        self.potential_net.to('cpu').eval()
+        self.CV_net.to('cpu').eval()
+        self.AV_net.to('cpu').eval()
+        self.h_net.to('cpu').eval()
+        self.L_net.to('cpu').eval()
         
-        for name, net in networks.items():
-            net.to('cpu').eval()
+        # Create combined model
+        combined = CombinedPINNACLE(self.potential_net, self.CV_net, self.AV_net, self.h_net, self.L_net)
         
-        # Export each network
-        with torch.no_grad():
-            # Networks that take (x,t) input
-            dummy_input_2d = torch.randn(1, 2)
-            for net_name in ['potential_net', 'CV_net', 'AV_net', 'h_net']:
-                print(f"  Exporting {net_name}...")
-                torch.onnx.export(
-                    networks[net_name],
-                    dummy_input_2d,
-                    f"{save_dir}/{net_name}.onnx",
-                    export_params=True,
-                    opset_version=11,
-                    input_names=['input'],
-                    output_names=['output']
-                )
-            
-            # Film thickness network takes only time input
-            dummy_input_1d = torch.randn(1, 1)
-            print("  Exporting L_net...")
-            torch.onnx.export(
-                self.L_net,
-                dummy_input_1d,
-                f"{save_dir}/L_net.onnx",
-                export_params=True,
-                opset_version=11,
-                input_names=['time'],
-                output_names=['thickness']
-            )
+        # Export to ONNX
+        dummy_x = torch.randn(1, 1)  # spatial position
+        dummy_t = torch.randn(1, 1)  # time
         
-        print(f"✅ All networks exported to {save_dir}/")
+        torch.onnx.export(
+            combined,
+            (dummy_x, dummy_t),
+            save_path,
+            input_names=['x_position', 't_time'],
+            output_names=['potential', 'cation_vacancy_conc', 'anion_vacancy_conc', 'hole_conc', 'film_thickness']
+        )
+        
+        print(f"✅ Architecture exported!")
+        
 
 @hydra.main(config_path="conf", config_name="config", version_base=None)
 def main(cfg: DictConfig):
@@ -765,7 +767,7 @@ def main(cfg: DictConfig):
     # Export to ONNX after training
     print("\n" + "="*50)
     print("Exporting trained model to ONNX...")
-    model.export_to_onnx(save_dir=f"outputs/checkpoints_{cfg.experiment.name}")
+    model.export_for_netron()
     print("="*50)
     
     # Create comprehensive loss plots
