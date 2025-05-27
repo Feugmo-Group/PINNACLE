@@ -10,7 +10,10 @@ import pyvista as pv
 from matplotlib.colors import LinearSegmentedColormap
 from tqdm import tqdm
 
-
+class Swish(nn.Module):
+    def forward(self, x):
+        return x * torch.sigmoid(x)
+    
 class FFN(nn.Module):
     """Fully Connected Feed Forward Neural Net"""
 
@@ -21,7 +24,7 @@ class FFN(nn.Module):
         self.num_layers = cfg.nr_layers
         self.layer_size = cfg.layer_size
 
-        self.activation = nn.Tanh()
+        self.activation = Swish()
 
         # Input layer
         self.input_layer = nn.Linear(input_dim, self.layer_size)
@@ -553,7 +556,7 @@ class Pinnacle():
                 
                 # Save if specified
                 if step % self.cfg.training.save_network_freq == 0 and step > 0:
-                    self.save_model(f"outputs/checkpoints/model_step_{step}")
+                    self.save_model(f"outputs/checkpoints_{self.cfg.experiment.name}/model_step_{step}")
                     
                     # Visualize if needed
                     #if step % self.cfg.training.rec_inference_freq == 0:
@@ -566,7 +569,7 @@ class Pinnacle():
         print("PDE Analysis:")
         print(f"  Worst PDE: {max([('CV', final_loss['cv_pde']), ('AV', final_loss['av_pde']), ('Hole', final_loss['h_pde']), ('Poisson', final_loss['poisson_pde'])], key=lambda x: x[1])}")
         
-        self.save_model("outputs/checkpoints/model_final")
+        self.save_model(f"outputs/checkpoints_{self.cfg.experiment.name}/model_final")
         #self.visualize("final")
         
         return loss_history
@@ -575,8 +578,8 @@ class Pinnacle():
         """Save model state."""
         torch.save({
             'potential_net': self.potential_net.state_dict(),
-            'CV_net': self.CV_net.state_dict(),  # Fix name
-            'AV_net': self.AV_net.state_dict(),  # Add missing nets
+            'CV_net': self.CV_net.state_dict(),  
+            'AV_net': self.AV_net.state_dict(),  
             'h_net': self.h_net.state_dict(),
             'L_net': self.L_net.state_dict(),
             'optimizer': self.optimizer.state_dict(),
@@ -593,13 +596,13 @@ def main(cfg: DictConfig):
     loss_history = model.train()
     
     # Create comprehensive loss plots
-    plot_detailed_losses(loss_history)
+    plot_detailed_losses(loss_history,cfg.experiment.name)
 
-def plot_detailed_losses(loss_history):
+def plot_detailed_losses(loss_history,experiment_name):
     """Create comprehensive plots of all loss components"""
     
     # Create output directory
-    os.makedirs("outputs/plots", exist_ok=True)
+    os.makedirs(f"outputs/plots_{experiment_name}", exist_ok=True)
     
     # Plot 1: Main loss components
     fig, axes = plt.subplots(2, 2, figsize=(15, 12))
@@ -654,12 +657,8 @@ def plot_detailed_losses(loss_history):
     axes[1,1].grid(True, alpha=0.3)
     
     plt.tight_layout()
-    plt.savefig("outputs/plots/detailed_training_losses.png", dpi=300, bbox_inches='tight')
+    plt.savefig(f"outputs/plots_{experiment_name}/detailed_training_losses.png", dpi=300, bbox_inches='tight')
     plt.close()
-    
-    print("\nDetailed loss plots saved to outputs/plots/")
-    print("- detailed_training_losses.png: Complete breakdown of all loss components")
-    print("- pde_dominance_analysis.png: Analysis of which PDEs dominate")
     
     # Print final analysis
     final_losses = {k: v[-1] for k, v in loss_history.items()}
