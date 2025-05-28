@@ -26,7 +26,7 @@ training:
   rec_results_freq: 100
   rec_inference_freq: 1000
   save_network_freq: 1000
-  causal: 0.01
+  causal: 0.001
 
 # Batch sizes for different constraints
 batch_size:
