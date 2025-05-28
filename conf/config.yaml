@@ -134,7 +134,7 @@ domain:
     L_initial: 1.0e-9 # Initial film thickness [m]
 
 experiment:
-  name: "interior_only_causal"
+  name: "Full_Causal_Test_1"
 
 # Hydra-specific settings
 hydra:

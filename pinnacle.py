@@ -253,19 +253,39 @@ class Pinnacle():
 
     def L_loss(self):
         """Enforce dL/dt = Ω(k2 - k5)"""
-        t = torch.rand(self.cfg.batch_size.film_thickness,1,device=self.device,requires_grad=True) * self.time_scale
 
-        L_pred = self.L_net(t)
+        L_loss_time_series = []
+        time_steps = torch.linspace(0.0,self.time_scale,self.cfg.batch_size.temporal,device=self.device)
+        for index,t_i in enumerate(time_steps):
+            t = torch.ones(self.cfg.batch_size.film_thickness,1,device=self.device,requires_grad=True) * t_i
 
-        dL_dt = torch.autograd.grad(L_pred,t,grad_outputs=torch.ones_like(L_pred),create_graph=True,retain_graph=True)[0]
+            L_pred = self.L_net(t)
 
-        # Get rate constants (using predicted L for f/s boundary)
-        k1, k2, k3, k4, k5, ktp, ko2 = self.compute_rate_constants()
+            dL_dt = torch.autograd.grad(L_pred,t,grad_outputs=torch.ones_like(L_pred),create_graph=True,retain_graph=True)[0]
 
-        dL_dt_physics = self.Omega * (k2 - k5)
+            # Get rate constants (using predicted L for f/s boundary)
+            k1, k2, k3, k4, k5, ktp, ko2 = self.compute_rate_constants()
 
-        return torch.mean( (dL_dt - dL_dt_physics)**2 )
+            dL_dt_physics = self.Omega * (k2 - k5)
 
+            L_loss_ti = torch.mean( (dL_dt - dL_dt_physics)**2 )
+
+            L_loss_time_series.append(L_loss_ti)
+
+        L_loss_time_series_tensor = torch.FloatTensor(L_loss_time_series)
+
+        L_loss = 0.0
+        for index,i in tqdm(enumerate(L_loss_time_series)):
+            #need a list of all the losses up until i-1?
+            if index> 0:
+                previous_index = index-1
+            else:
+                previous_index = 0
+
+            w_i = torch.exp(-self.cfg.training.causal*torch.sum(L_loss_time_series_tensor[:previous_index])) #Causaulity Weight
+            L_loss += w_i*L_loss_time_series_tensor[index]
+
+        return L_loss
 
     def get_E_ext(self, t):
         """Dummy function for external potential - will implement sweeping later"""
@@ -273,7 +293,7 @@ class Pinnacle():
         return self.E_ext  # For now just return constant value
 
     def compute_rate_constants(self):
-        
+        ### MAY WANT TO CHANGE THIS TO TAKE AN INPUT TIME SO WE PREDICT THE CONSTANT AT RELEVANT TIME
         #Initialize prediction time range
         t = torch.rand(self.cfg.batch_size.rate, 1, device=self.device) * self.time_scale
         
@@ -357,6 +377,13 @@ class Pinnacle():
         
         k1, k2, k3, k4, k5, ktp, ko2 = self.compute_rate_constants()
 
+        cv_cd_mf_loss_time_series = []
+        cv_cd_fs_loss_time_series = []
+        av_cd_mf_loss_time_series = []
+        av_cd_fs_loss_time_series = []
+        h_cd_fs_loss_time_series = []
+        poisson_mf_loss_time_series = []
+        poisson_fs_loss_time_series = []
 
 
         time_steps = torch.linspace(0.0,self.time_scale,self.cfg.batch_size.temporal,device=self.device)
@@ -383,8 +410,7 @@ class Pinnacle():
             L_pred_t = torch.autograd.grad(L_pred,t,grad_outputs=torch.ones_like(L_pred),retain_graph=True,create_graph=True)[0]
             
             q1 = self.k1_0* torch.exp(self.alpha_cv*(self.E_ext-u_pred_mf)) + self.U_cv*u_pred_mf_x  - L_pred_t #(self.Omega*(k2-k5)) #analytic enforcing might be stiff
-
-            cv_mf_residual = -self.D_cv*cv_pred_mf_x +q1*cv_pred_mf
+            cv_mf_loss_ti = torch.mean((-self.D_cv*cv_pred_mf_x +q1*cv_pred_mf)**2)
 
             # av at m/f conditions 
             av_pred_mf = self.AV_net(inputs_mf)
@@ -393,12 +419,12 @@ class Pinnacle():
             g2 = (4/3)*self.k2_0*torch.exp(self.alpha_av*(self.E_ext-u_pred_mf))
             q2 = -1*self.U_av*u_pred_mf_x - L_pred_t #(self.Omega*(k2-k5)) #analytic enforcing might be stiff
 
-            av_mf_residual = self.D_av*av_pred_mf_x -g2 +q2*av_pred_mf
+            av_mf_loss_ti = torch.mean((self.D_av*av_pred_mf_x -g2 +q2*av_pred_mf)**2)
 
             # potential at m/f conditions
             g3 = self.eps_Ddl* ((u_pred_mf-self.E_ext)/self.d_Ddl)
-            u_mf_loss = torch.mean((-self.epsilonf*u_pred_mf_x -g3)**2)
 
+            u_mf_loss_ti = torch.mean((-self.epsilonf*u_pred_mf_x -g3)**2)
 
             # f/s interface conditions
             x_fs = torch.ones(self.cfg.batch_size.BC, 1, device=self.device)*L_pred
@@ -415,7 +441,7 @@ class Pinnacle():
             g4 = -1*self.k3_0*torch.exp(self.beta_cv*u_pred_fs)
             q4 = -1*self.U_cv*u_pred_fs_x
             
-            cv_fs_residual = -self.D_cv*cv_pred_fs_x -g4 + q4*cv_pred_fs
+            cv_fs_loss_ti = torch.mean((-self.D_cv*cv_pred_fs_x -g4 + q4*cv_pred_fs)**2)
 
             # av at f/s conditions
             av_pred_fs = self.AV_net(inputs_fs)
@@ -423,7 +449,7 @@ class Pinnacle():
 
             q5 = -1*(self.k4_0*torch.exp(self.alpha_av*u_pred_fs) + self.U_av*u_pred_fs_x)
             
-            av_fs_loss = torch.mean((-self.D_av*av_pred_fs_x + q5*av_pred_fs)**2)
+            av_fs_loss_ti = torch.mean((-self.D_av*av_pred_fs_x + q5*av_pred_fs)**2)
 
             # hole at f/s conditions
             h_pred_fs = self.h_net(inputs_fs)
@@ -434,11 +460,63 @@ class Pinnacle():
             g6 = torch.zeros_like(h_pred_fs)
             q6 = torch.where(mask, (self.ktp_0 + (self.F*self.D_h)/(self.R*self.T)*u_pred_fs_x), torch.zeros_like(h_pred_fs)) #Might also be very stiff, maybe change? 
 
-            h_fs_loss = torch.mean((-self.D_h*h_pred_fs_x -g6 +q6*h_pred_fs)**2)
+            h_fs_loss_ti = torch.mean((-self.D_h*h_pred_fs_x -g6 +q6*h_pred_fs)**2)
 
             # Potential at f/s loss
             r = -self.d_Ddl*(self.eps_film/self.eps_Ddl)*u_pred_fs_x - self.d_dl*(self.eps_film/self.eps_dl)*u_pred_fs_x
-            u_fs_loss = torch.mean((u_pred_fs - r)**2)
+            u_fs_loss_ti = torch.mean((u_pred_fs - r)**2)
+
+            cv_cd_mf_loss_time_series.append(cv_mf_loss_ti)
+            cv_cd_fs_loss_time_series.append(cv_fs_loss_ti)
+            av_cd_mf_loss_time_series.append(av_mf_loss_ti)
+            av_cd_mf_loss_time_series.append(cv_fs_loss_ti)
+            h_cd_fs_loss_time_series.append(h_fs_loss_ti)
+            poisson_mf_loss_time_series.append(u_mf_loss_ti)
+            poisson_fs_loss_time_series.append(u_fs_loss_ti)
+
+        cv_cd_mf_loss_time_series_tensor = torch.FloatTensor(cv_cd_mf_loss_time_series)
+        cv_cd_fs_loss_time_series_tensor = torch.FloatTensor(cv_cd_fs_loss_time_series)
+        av_cd_mf_loss_time_series_tensor = torch.FloatTensor(av_cd_mf_loss_time_series)
+        av_cd_fs_loss_time_series_tensor = torch.FloatTensor(av_cd_fs_loss_time_series)
+        h_cd_fs_loss_time_series_tensor = torch.FloatTensor(h_cd_fs_loss_time_series)
+        poisson_mf_loss_time_series_tensor = torch.FloatTensor(poisson_mf_loss_time_series)
+        poisson_fs_loss_time_series_tensor = torch.FloatTensor(poisson_fs_loss_time_series)
+
+        cv_mf_loss = 0.0
+        cv_fs_loss = 0.0
+        av_mf_loss = 0.0
+        av_fs_loss = 0.0
+        h_fs_loss = 0.0
+        u_mf_loss = 0.0
+        u_fs_loss = 0.0
+        for index,i in tqdm(enumerate(cv_cd_mf_loss_time_series)):
+            #need a list of all the losses up until i-1?
+            if index> 0:
+                previous_index = index-1
+            else:
+                previous_index = 0
+
+            w_i_cv_mf= torch.exp(-self.cfg.training.causal*torch.sum(cv_cd_mf_loss_time_series_tensor[:previous_index])) #Causaulity Weight
+            cv_mf_loss += w_i_cv_mf*cv_cd_mf_loss_time_series_tensor[index]
+
+            w_i_cv_fs= torch.exp(-self.cfg.training.causal*torch.sum(cv_cd_fs_loss_time_series_tensor[:previous_index])) #Causaulity Weight
+            cv_fs_loss += w_i_cv_fs*cv_cd_fs_loss_time_series_tensor[index]
+
+            w_i_av_mf= torch.exp(-self.cfg.training.causal*torch.sum(av_cd_mf_loss_time_series_tensor[:previous_index])) #Causaulity Weight
+            av_mf_loss += w_i_av_mf*av_cd_mf_loss_time_series_tensor[index]
+
+            w_i_av_fs= torch.exp(-self.cfg.training.causal*torch.sum(av_cd_fs_loss_time_series_tensor[:previous_index])) #Causaulity Weight
+            av_fs_loss += w_i_av_fs*av_cd_fs_loss_time_series_tensor[index]
+
+            w_i_h_fs= torch.exp(-self.cfg.training.causal*torch.sum(h_cd_fs_loss_time_series_tensor[:previous_index])) #Causaulity Weight
+            h_fs_loss += w_i_h_fs*h_cd_fs_loss_time_series_tensor[index]
+
+            w_i_u_mf= torch.exp(-self.cfg.training.causal*torch.sum(poisson_mf_loss_time_series_tensor[:previous_index])) #Causaulity Weight
+            u_mf_loss += w_i_u_mf*poisson_mf_loss_time_series_tensor[index]
+            
+            w_i_u_fs= torch.exp(-self.cfg.training.causal*torch.sum(poisson_fs_loss_time_series_tensor[:previous_index])) #Causaulity Weight
+            u_fs_loss += w_i_u_fs*poisson_fs_loss_time_series_tensor[index]
+
 
         total_BC_loss = cv_mf_loss + av_mf_loss + u_mf_loss + cv_fs_loss + av_fs_loss + u_fs_loss + h_fs_loss
 
@@ -450,9 +528,9 @@ class Pinnacle():
         #Create a set of time_steps to iterate over
         time_steps = torch.linspace(0.0,self.time_scale,self.cfg.batch_size.temporal,device=self.device)
         
-        cd_cv_loss_time_series = []
-        av_cv_loss_time_series = []
-        h_cv_loss_time_series = []
+        cv_cd_loss_time_series = []
+        av_cd_loss_time_series = []
+        h_cd_loss_time_series = []
         poisson_loss_time_series = []
 
         for i,t_i in tqdm(enumerate(time_steps)):
@@ -470,41 +548,41 @@ class Pinnacle():
             h_pde_loss_ti = torch.mean(cd_h_residual**2)
             poisson_pde_loss_ti = torch.mean(poisson_residual**2)
         
-            cd_cv_loss_time_series.append(cv_pde_loss_ti) #need this to be a tensor and not a list
-            av_cv_loss_time_series.append(av_pde_loss_ti)
-            h_cv_loss_time_series.append(h_pde_loss_ti)
+            cv_cd_loss_time_series.append(cv_pde_loss_ti) #need this to be a tensor and not a list
+            av_cd_loss_time_series.append(av_pde_loss_ti)
+            h_cd_loss_time_series.append(h_pde_loss_ti)
             poisson_loss_time_series.append(poisson_pde_loss_ti)
 
             
-        cd_cv_loss_time_series_tensor = torch.FloatTensor(cd_cv_loss_time_series)
-        av_cv_loss_time_series_tensor=torch.FloatTensor(av_cv_loss_time_series)
-        h_cv_loss_time_series_tensor=torch.FloatTensor(h_cv_loss_time_series)
+        cv_cd_loss_time_series_tensor = torch.FloatTensor(cv_cd_loss_time_series)
+        av_cd_loss_time_series_tensor=torch.FloatTensor(av_cd_loss_time_series)
+        h_cd_loss_time_series_tensor=torch.FloatTensor(h_cd_loss_time_series)
         poisson_loss_time_series_tensor=torch.FloatTensor(poisson_loss_time_series)
-        cd_cv_weighted_loss = 0 
-        av_cv_weighted_loss = 0 
-        h_cv_weighted_loss = 0
-        poisson_weighted_loss = 0  
-        for index,i in tqdm(enumerate(cd_cv_loss_time_series)):
+        cv_cd_weighted_loss = 0.0 
+        av_cv_weighted_loss = 0.0 
+        h_cv_weighted_loss = 0.0
+        poisson_weighted_loss = 0.0  
+        for index,i in tqdm(enumerate(cv_cd_loss_time_series)):
             #need a list of all the losses up until i-1?
             if index> 0:
                 previous_index = index-1
             else:
                 previous_index = 0
-            w_i_cv= torch.exp(-self.cfg.training.causal*torch.sum(cd_cv_loss_time_series_tensor[:previous_index])) #Causaulity Weight
-            cd_cv_weighted_loss += w_i_cv*cd_cv_loss_time_series[index]
+            w_i_cv= torch.exp(-self.cfg.training.causal*torch.sum(cv_cd_loss_time_series_tensor[:previous_index])) #Causaulity Weight
+            cv_cd_weighted_loss += w_i_cv*cv_cd_loss_time_series_tensor[index]
         
-            w_i_av= torch.exp(-self.cfg.training.causal*torch.sum(av_cv_loss_time_series_tensor[:previous_index])) #Causaulity Weight
-            av_cv_weighted_loss += w_i_av*av_cv_loss_time_series[index]
+            w_i_av= torch.exp(-self.cfg.training.causal*torch.sum(av_cd_loss_time_series_tensor[:previous_index])) #Causaulity Weight
+            av_cv_weighted_loss += w_i_av*av_cd_loss_time_series_tensor[index]
 
-            w_i_h= torch.exp(-self.cfg.training.causal*torch.sum(h_cv_loss_time_series_tensor[:previous_index])) #Causaulity Weight
-            h_cv_weighted_loss += w_i_h*h_cv_loss_time_series[index]
+            w_i_h= torch.exp(-self.cfg.training.causal*torch.sum(h_cd_loss_time_series_tensor[:previous_index])) #Causaulity Weight
+            h_cv_weighted_loss += w_i_h*h_cd_loss_time_series_tensor[index]
 
             w_i_poi= torch.exp(-self.cfg.training.causal*torch.sum(poisson_loss_time_series_tensor[:previous_index])) #Causaulity Weight
-            poisson_weighted_loss += w_i_poi*poisson_loss_time_series[index]
+            poisson_weighted_loss += w_i_poi*poisson_loss_time_series_tensor[index]
 
-        total_interior_loss = cd_cv_weighted_loss+av_cv_weighted_loss+h_cv_weighted_loss+poisson_weighted_loss
+        total_interior_loss = cv_cd_weighted_loss+av_cv_weighted_loss+h_cv_weighted_loss+poisson_weighted_loss
 
-        return total_interior_loss, cd_cv_weighted_loss,av_cv_weighted_loss,h_cv_weighted_loss,poisson_weighted_loss
+        return total_interior_loss, cv_cd_weighted_loss,av_cv_weighted_loss,h_cv_weighted_loss,poisson_weighted_loss
 
 
     def total_loss(self):
