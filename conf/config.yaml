@@ -131,7 +131,7 @@ domain:
   time:
     time_scale: 1
   initial:
-    L_initial: 1.0e-9 # Initial film thickness [m]
+    L_initial: 1.0 # Initial film thickness [m]
 
 experiment:
   name: "Full_Causal_Test_1"
