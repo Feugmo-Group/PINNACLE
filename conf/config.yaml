@@ -26,11 +26,13 @@ training:
   rec_results_freq: 100
   rec_inference_freq: 1000
   save_network_freq: 1000
+  causal: 0.01
 
 # Batch sizes for different constraints
 batch_size:
   BC: 1024 # Boundary points per boundary
   interior: 1024 # Interior points
+  temporal : 10 # number of time steps for causal training
   inference: 1024 # Points for inference/visualization
   IC: 1024
   rate: 1024 # For rate constant computation
@@ -90,7 +92,6 @@ pde:
     
     # Molar volume
     Omega: 1.4e-5 # [m³/mol]
-
   rates:
     # Standard rate constants
     k1_0: 4.5e-8 # [m/s]
@@ -133,7 +134,7 @@ domain:
     L_initial: 1.0e-9 # Initial film thickness [m]
 
 experiment:
-  name: "E_ext=0.8,swish"
+  name: "interior_only_causal"
 
 # Hydra-specific settings
 hydra:
