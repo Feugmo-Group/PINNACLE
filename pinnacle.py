@@ -469,7 +469,7 @@ class Pinnacle():
             cv_cd_mf_loss_time_series.append(cv_mf_loss_ti)
             cv_cd_fs_loss_time_series.append(cv_fs_loss_ti)
             av_cd_mf_loss_time_series.append(av_mf_loss_ti)
-            av_cd_mf_loss_time_series.append(cv_fs_loss_ti)
+            av_cd_fs_loss_time_series.append(cv_fs_loss_ti)
             h_cd_fs_loss_time_series.append(h_fs_loss_ti)
             poisson_mf_loss_time_series.append(u_mf_loss_ti)
             poisson_fs_loss_time_series.append(u_fs_loss_ti)
@@ -490,7 +490,6 @@ class Pinnacle():
         u_mf_loss = 0.0
         u_fs_loss = 0.0
         for index,i in tqdm(enumerate(cv_cd_mf_loss_time_series)):
-            #need a list of all the losses up until i-1?
             if index> 0:
                 previous_index = index-1
             else:
