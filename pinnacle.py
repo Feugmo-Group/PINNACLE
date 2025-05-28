@@ -41,7 +41,6 @@ class FFN(nn.Module):
         self.output_layer = nn.Linear(self.layer_size, output_dim)
 
     def forward(self, x):
-        x_input = x
         x = self.activation(self.input_layer(x))
 
         for i, layer in enumerate(self.hidden_layers):
@@ -264,7 +263,7 @@ class Pinnacle():
             dL_dt = torch.autograd.grad(L_pred,t,grad_outputs=torch.ones_like(L_pred),create_graph=True,retain_graph=True)[0]
 
             # Get rate constants (using predicted L for f/s boundary)
-            k1, k2, k3, k4, k5, ktp, ko2 = self.compute_rate_constants()
+            k1, k2, k3, k4, k5, ktp, ko2 = self.compute_rate_constants(t)
 
             dL_dt_physics = self.Omega * (k2 - k5)
 
@@ -275,7 +274,7 @@ class Pinnacle():
         L_loss_time_series_tensor = torch.FloatTensor(L_loss_time_series)
 
         L_loss = 0.0
-        for index,i in tqdm(enumerate(L_loss_time_series)):
+        for index,i in enumerate(L_loss_time_series):
             #need a list of all the losses up until i-1?
             if index> 0:
                 previous_index = index-1
@@ -283,7 +282,7 @@ class Pinnacle():
                 previous_index = 0
 
             w_i = torch.exp(-self.cfg.training.causal*torch.sum(L_loss_time_series_tensor[:previous_index])) #Causaulity Weight
-            L_loss += w_i*L_loss_time_series_tensor[index]
+            L_loss += (1/self.cfg.batch_size.temporal)*w_i*L_loss_time_series_tensor[index]
 
         return L_loss
 
@@ -292,10 +291,7 @@ class Pinnacle():
 
         return self.E_ext  # For now just return constant value
 
-    def compute_rate_constants(self):
-        ### MAY WANT TO CHANGE THIS TO TAKE AN INPUT TIME SO WE PREDICT THE CONSTANT AT RELEVANT TIME
-        #Initialize prediction time range
-        t = torch.rand(self.cfg.batch_size.rate, 1, device=self.device) * self.time_scale
+    def compute_rate_constants(self,t):
         
         # Predict the potential on the m/f (x=0) boundary
         x_mf = torch.zeros(self.cfg.batch_size.rate, 1, device=self.device)
@@ -374,9 +370,7 @@ class Pinnacle():
 
     def boundary_loss(self):
         """Compute boundary losses with individual tracking"""
-        
-        k1, k2, k3, k4, k5, ktp, ko2 = self.compute_rate_constants()
-
+    
         cv_cd_mf_loss_time_series = []
         cv_cd_fs_loss_time_series = []
         av_cd_mf_loss_time_series = []
@@ -391,7 +385,7 @@ class Pinnacle():
             
             #Generate a t tensor for this time step
             t = torch.ones(self.cfg.batch_size.BC,1,device=self.device,requires_grad=True)*t_i
-            
+            k1, k2, k3, k4, k5, ktp, ko2 = self.compute_rate_constants(t)
             # m/f interface conditions
             x_mf = torch.zeros(self.cfg.batch_size.BC, 1, device=self.device)
             x_mf.requires_grad_(True)
@@ -469,7 +463,7 @@ class Pinnacle():
             cv_cd_mf_loss_time_series.append(cv_mf_loss_ti)
             cv_cd_fs_loss_time_series.append(cv_fs_loss_ti)
             av_cd_mf_loss_time_series.append(av_mf_loss_ti)
-            av_cd_fs_loss_time_series.append(cv_fs_loss_ti)
+            av_cd_fs_loss_time_series.append(av_fs_loss_ti)
             h_cd_fs_loss_time_series.append(h_fs_loss_ti)
             poisson_mf_loss_time_series.append(u_mf_loss_ti)
             poisson_fs_loss_time_series.append(u_fs_loss_ti)
@@ -489,32 +483,32 @@ class Pinnacle():
         h_fs_loss = 0.0
         u_mf_loss = 0.0
         u_fs_loss = 0.0
-        for index,i in tqdm(enumerate(cv_cd_mf_loss_time_series)):
+        for index,i in enumerate(cv_cd_mf_loss_time_series):
             if index> 0:
                 previous_index = index-1
             else:
                 previous_index = 0
 
-            w_i_cv_mf= torch.exp(-self.cfg.training.causal*torch.sum(cv_cd_mf_loss_time_series_tensor[:previous_index])) #Causaulity Weight
-            cv_mf_loss += w_i_cv_mf*cv_cd_mf_loss_time_series_tensor[index]
+            w_i_cv_mf= torch.exp(-self.cfg.training.causal*torch.sum(cv_cd_mf_loss_time_series_tensor[:previous_index])) #Causality Weight
+            cv_mf_loss += (1/self.cfg.batch_size.temporal)*w_i_cv_mf*cv_cd_mf_loss_time_series_tensor[index] #Time average?
 
-            w_i_cv_fs= torch.exp(-self.cfg.training.causal*torch.sum(cv_cd_fs_loss_time_series_tensor[:previous_index])) #Causaulity Weight
-            cv_fs_loss += w_i_cv_fs*cv_cd_fs_loss_time_series_tensor[index]
+            w_i_cv_fs= torch.exp(-self.cfg.training.causal*torch.sum(cv_cd_fs_loss_time_series_tensor[:previous_index])) #Causality Weight
+            cv_fs_loss += (1/self.cfg.batch_size.temporal)*w_i_cv_fs*cv_cd_fs_loss_time_series_tensor[index]
 
-            w_i_av_mf= torch.exp(-self.cfg.training.causal*torch.sum(av_cd_mf_loss_time_series_tensor[:previous_index])) #Causaulity Weight
-            av_mf_loss += w_i_av_mf*av_cd_mf_loss_time_series_tensor[index]
+            w_i_av_mf= torch.exp(-self.cfg.training.causal*torch.sum(av_cd_mf_loss_time_series_tensor[:previous_index])) #Causality Weight
+            av_mf_loss += (1/self.cfg.batch_size.temporal)*w_i_av_mf*av_cd_mf_loss_time_series_tensor[index]
 
-            w_i_av_fs= torch.exp(-self.cfg.training.causal*torch.sum(av_cd_fs_loss_time_series_tensor[:previous_index])) #Causaulity Weight
-            av_fs_loss += w_i_av_fs*av_cd_fs_loss_time_series_tensor[index]
+            w_i_av_fs= torch.exp(-self.cfg.training.causal*torch.sum(av_cd_fs_loss_time_series_tensor[:previous_index])) #Causality Weight
+            av_fs_loss += (1/self.cfg.batch_size.temporal)*w_i_av_fs*av_cd_fs_loss_time_series_tensor[index]
 
-            w_i_h_fs= torch.exp(-self.cfg.training.causal*torch.sum(h_cd_fs_loss_time_series_tensor[:previous_index])) #Causaulity Weight
-            h_fs_loss += w_i_h_fs*h_cd_fs_loss_time_series_tensor[index]
+            w_i_h_fs= torch.exp(-self.cfg.training.causal*torch.sum(h_cd_fs_loss_time_series_tensor[:previous_index])) #Causality Weight
+            h_fs_loss += (1/self.cfg.batch_size.temporal)*w_i_h_fs*h_cd_fs_loss_time_series_tensor[index]
 
-            w_i_u_mf= torch.exp(-self.cfg.training.causal*torch.sum(poisson_mf_loss_time_series_tensor[:previous_index])) #Causaulity Weight
-            u_mf_loss += w_i_u_mf*poisson_mf_loss_time_series_tensor[index]
+            w_i_u_mf= torch.exp(-self.cfg.training.causal*torch.sum(poisson_mf_loss_time_series_tensor[:previous_index])) #Causality Weight
+            u_mf_loss += (1/self.cfg.batch_size.temporal)*w_i_u_mf*poisson_mf_loss_time_series_tensor[index]
             
-            w_i_u_fs= torch.exp(-self.cfg.training.causal*torch.sum(poisson_fs_loss_time_series_tensor[:previous_index])) #Causaulity Weight
-            u_fs_loss += w_i_u_fs*poisson_fs_loss_time_series_tensor[index]
+            w_i_u_fs= torch.exp(-self.cfg.training.causal*torch.sum(poisson_fs_loss_time_series_tensor[:previous_index])) #Causality Weight
+            u_fs_loss += (1/self.cfg.batch_size.temporal)*w_i_u_fs*poisson_fs_loss_time_series_tensor[index]
 
 
         total_BC_loss = cv_mf_loss + av_mf_loss + u_mf_loss + cv_fs_loss + av_fs_loss + u_fs_loss + h_fs_loss
@@ -532,7 +526,7 @@ class Pinnacle():
         h_cd_loss_time_series = []
         poisson_loss_time_series = []
 
-        for i,t_i in tqdm(enumerate(time_steps)):
+        for i,t_i in enumerate(time_steps):
             
             t = torch.ones(self.cfg.batch_size.interior,1,device=self.device)*t_i
             L_pred = self.L_net(t)
@@ -561,23 +555,23 @@ class Pinnacle():
         av_cv_weighted_loss = 0.0 
         h_cv_weighted_loss = 0.0
         poisson_weighted_loss = 0.0  
-        for index,i in tqdm(enumerate(cv_cd_loss_time_series)):
+        for index,i in enumerate(cv_cd_loss_time_series):
             #need a list of all the losses up until i-1?
             if index> 0:
                 previous_index = index-1
             else:
                 previous_index = 0
             w_i_cv= torch.exp(-self.cfg.training.causal*torch.sum(cv_cd_loss_time_series_tensor[:previous_index])) #Causaulity Weight
-            cv_cd_weighted_loss += w_i_cv*cv_cd_loss_time_series_tensor[index]
+            cv_cd_weighted_loss += (1/self.cfg.batch_size.temporal)*w_i_cv*cv_cd_loss_time_series_tensor[index]
         
             w_i_av= torch.exp(-self.cfg.training.causal*torch.sum(av_cd_loss_time_series_tensor[:previous_index])) #Causaulity Weight
-            av_cv_weighted_loss += w_i_av*av_cd_loss_time_series_tensor[index]
+            av_cv_weighted_loss += (1/self.cfg.batch_size.temporal)*w_i_av*av_cd_loss_time_series_tensor[index]
 
             w_i_h= torch.exp(-self.cfg.training.causal*torch.sum(h_cd_loss_time_series_tensor[:previous_index])) #Causaulity Weight
-            h_cv_weighted_loss += w_i_h*h_cd_loss_time_series_tensor[index]
+            h_cv_weighted_loss += (1/self.cfg.batch_size.temporal)*w_i_h*h_cd_loss_time_series_tensor[index]
 
             w_i_poi= torch.exp(-self.cfg.training.causal*torch.sum(poisson_loss_time_series_tensor[:previous_index])) #Causaulity Weight
-            poisson_weighted_loss += w_i_poi*poisson_loss_time_series_tensor[index]
+            poisson_weighted_loss += (1/self.cfg.batch_size.temporal)*w_i_poi*poisson_loss_time_series_tensor[index]
 
         total_interior_loss = cv_cd_weighted_loss+av_cv_weighted_loss+h_cv_weighted_loss+poisson_weighted_loss
 
@@ -662,24 +656,24 @@ class Pinnacle():
             for key in loss_history.keys():
                 loss_history[key].append(loss_dict[key])
             
-            # Print progress with detailed breakdown
+            # tqdm.write progress with detailed breakdown
             if step % self.cfg.training.rec_results_freq == 0:
-                print(f"\n=== Step {step} ===")
-                print(f"Total Loss: {loss_dict['total']:.6f}")
-                print(f"Interior: {loss_dict['interior']:.6f} | Boundary: {loss_dict['boundary']:.6f} | "
+                tqdm.write(f"\n=== Step {step} ===")
+                tqdm.write(f"Total Loss: {loss_dict['total']:.6f}")
+                tqdm.write(f"Interior: {loss_dict['interior']:.6f} | Boundary: {loss_dict['boundary']:.6f} | "
                     f"Initial: {loss_dict['initial']:.6f} | L_Physics: {loss_dict['L_physics']:.6f}")
                 
-                print("\nPDE Residuals:")
-                print(f"  CV PDE: {loss_dict['cv_pde']:.6f} | AV PDE: {loss_dict['av_pde']:.6f}")
-                print(f"  Hole PDE: {loss_dict['h_pde']:.6f} | Poisson PDE: {loss_dict['poisson_pde']:.6f}")
+                tqdm.write("\nPDE Residuals:")
+                tqdm.write(f"  CV PDE: {loss_dict['cv_pde']:.6f} | AV PDE: {loss_dict['av_pde']:.6f}")
+                tqdm.write(f"  Hole PDE: {loss_dict['h_pde']:.6f} | Poisson PDE: {loss_dict['poisson_pde']:.6f}")
                 
-                print("\nBoundary Conditions:")
-                print(f"  m/f interface - CV: {loss_dict['cv_mf_bc']:.6f} | AV: {loss_dict['av_mf_bc']:.6f} | U: {loss_dict['u_mf_bc']:.6f}")
-                print(f"  f/s interface - CV: {loss_dict['cv_fs_bc']:.6f} | AV: {loss_dict['av_fs_bc']:.6f} | U: {loss_dict['u_fs_bc']:.6f} | H: {loss_dict['h_fs_bc']:.6f}")
+                tqdm.write("\nBoundary Conditions:")
+                tqdm.write(f"  m/f interface - CV: {loss_dict['cv_mf_bc']:.6f} | AV: {loss_dict['av_mf_bc']:.6f} | U: {loss_dict['u_mf_bc']:.6f}")
+                tqdm.write(f"  f/s interface - CV: {loss_dict['cv_fs_bc']:.6f} | AV: {loss_dict['av_fs_bc']:.6f} | U: {loss_dict['u_fs_bc']:.6f} | H: {loss_dict['h_fs_bc']:.6f}")
                 
-                print("\nInitial Conditions:")
-                print(f"  CV: {loss_dict['cv_ic']:.6f} | AV: {loss_dict['av_ic']:.6f} | H: {loss_dict['h_ic']:.6f}")
-                print(f"  Poisson: {loss_dict['poisson_ic']:.6f} | L: {loss_dict['L_ic']:.6f}")
+                tqdm.write("\nInitial Conditions:")
+                tqdm.write(f"  CV: {loss_dict['cv_ic']:.6f} | AV: {loss_dict['av_ic']:.6f} | H: {loss_dict['h_ic']:.6f}")
+                tqdm.write(f"  Poisson: {loss_dict['poisson_ic']:.6f} | L: {loss_dict['L_ic']:.6f}")
                 
                 # Save if specified
                 if step % self.cfg.training.save_network_freq == 0 and step > 0:
@@ -689,12 +683,12 @@ class Pinnacle():
                     if step % self.cfg.training.rec_inference_freq == 0:
                        self.visualize_predictions(step)
         
-        # Final save and print
+        # Final save and tqdm.write
         final_loss = loss_dict
-        print(f"\n=== Final Results (Step {step}) ===")
-        print(f"Total Loss: {final_loss['total']:.6f}")
-        print("PDE Analysis:")
-        print(f"  Worst PDE: {max([('CV', final_loss['cv_pde']), ('AV', final_loss['av_pde']), ('Hole', final_loss['h_pde']), ('Poisson', final_loss['poisson_pde'])], key=lambda x: x[1])}")
+        tqdm.write(f"\n=== Final Results (Step {step}) ===")
+        tqdm.write(f"Total Loss: {final_loss['total']:.6f}")
+        tqdm.write("PDE Analysis:")
+        tqdm.write(f"  Worst PDE: {max([('CV', final_loss['cv_pde']), ('AV', final_loss['av_pde']), ('Hole', final_loss['h_pde']), ('Poisson', final_loss['poisson_pde'])], key=lambda x: x[1])}")
         
         self.save_model(f"outputs/checkpoints_{self.cfg.experiment.name}/model_final")
         
@@ -720,9 +714,9 @@ class Pinnacle():
             L_final = self.L_net(t_final).item()
             x_range = torch.linspace(0, L_final, n_spatial).to(self.device)
             
-            print(f"Plotting predictions over:")
-            print(f"  Time range: [0, {self.time_scale:.1f}]")
-            print(f"  Spatial range: [0, {L_final:.2e}]")
+            tqdm.write(f"Plotting predictions over:")
+            tqdm.write(f"  Time range: [0, {self.time_scale:.1f}]")
+            tqdm.write(f"  Spatial range: [0, {L_final:.2e}]")
             
             # Create 2D grid for contour plots
             T_mesh, X_mesh = torch.meshgrid(t_range, x_range, indexing='ij')
@@ -798,14 +792,14 @@ class Pinnacle():
             plt.savefig(plot_path, dpi=300, bbox_inches='tight')
             plt.close()
             
-            # Print statistics
-            print(f"\nPrediction Statistics (Step {step}):")
-            print("-" * 40)
-            print(f"Potential:        {u_np.min():.2e} to {u_np.max():.2e} (mean: {u_np.mean():.2e})")
-            print(f"Cation Vacancies: {cv_np.min():.2e} to {cv_np.max():.2e} (mean: {cv_np.mean():.2e})")
-            print(f"Anion Vacancies:  {av_np.min():.2e} to {av_np.max():.2e} (mean: {av_np.mean():.2e})")
-            print(f"Holes:            {h_np.min():.2e} to {h_np.max():.2e} (mean: {h_np.mean():.2e})")
-            print(f"Film Thickness:   {L_np.min():.2e} to {L_np.max():.2e}")
+            # tqdm.write statistics
+            tqdm.write(f"\nPrediction Statistics (Step {step}):")
+            tqdm.write("-" * 40)
+            tqdm.write(f"Potential:        {u_np.min():.2e} to {u_np.max():.2e} (mean: {u_np.mean():.2e})")
+            tqdm.write(f"Cation Vacancies: {cv_np.min():.2e} to {cv_np.max():.2e} (mean: {cv_np.mean():.2e})")
+            tqdm.write(f"Anion Vacancies:  {av_np.min():.2e} to {av_np.max():.2e} (mean: {av_np.mean():.2e})")
+            tqdm.write(f"Holes:            {h_np.min():.2e} to {h_np.max():.2e} (mean: {h_np.mean():.2e})")
+            tqdm.write(f"Film Thickness:   {L_np.min():.2e} to {L_np.max():.2e}")
             
             # Check for potential issues"""Simple function to visualize network predictions across input ranges"""
         
@@ -873,12 +867,12 @@ class Pinnacle():
             output_names=['potential', 'cation_vacancy_conc', 'anion_vacancy_conc', 'hole_conc', 'film_thickness']
         )
         
-        print(f"✅ Architecture exported!")
+        tqdm.write(f"✅ Architecture exported!")
         
 
 @hydra.main(config_path="conf", config_name="config", version_base=None)
 def main(cfg: DictConfig):
-    print(OmegaConf.to_yaml(cfg))
+    tqdm.write(OmegaConf.to_yaml(cfg))
     
     # Create model
     model = Pinnacle(cfg)
@@ -888,10 +882,10 @@ def main(cfg: DictConfig):
     loss_history = model.train()
 
     # Export to ONNX after training
-    print("\n" + "="*50)
-    print("Exporting trained model to ONNX...")
+    tqdm.write("\n" + "="*50)
+    tqdm.write("Exporting trained model to ONNX...")
     model.export_for_netron()
-    print("="*50)
+    tqdm.write("="*50)
     
     # Create comprehensive loss plots
     plot_detailed_losses(loss_history,cfg.experiment.name)
@@ -958,10 +952,10 @@ def plot_detailed_losses(loss_history,experiment_name):
     plt.savefig(f"outputs/plots_{experiment_name}/detailed_training_losses.png", dpi=300, bbox_inches='tight')
     plt.close()
     
-    # Print final analysis
+    # tqdm.write final analysis
     final_losses = {k: v[-1] for k, v in loss_history.items()}
-    print(f"\nFinal Loss Analysis:")
-    print(f"Total Loss: {final_losses['total']:.2e}")
+    tqdm.write(f"\nFinal Loss Analysis:")
+    tqdm.write(f"Total Loss: {final_losses['total']:.2e}")
     
     pde_losses = {
         'CV PDE': final_losses['cv_pde'],
@@ -971,7 +965,7 @@ def plot_detailed_losses(loss_history,experiment_name):
     }
     
     dominant_pde = max(pde_losses, key=pde_losses.get)
-    print(f"Dominant PDE: {dominant_pde} ({pde_losses[dominant_pde]:.2e})")
+    tqdm.write(f"Dominant PDE: {dominant_pde} ({pde_losses[dominant_pde]:.2e})")
     
     bc_losses = {
         'CV (m/f)': final_losses['cv_mf_bc'],
@@ -984,7 +978,7 @@ def plot_detailed_losses(loss_history,experiment_name):
     }
     
     dominant_bc = max(bc_losses, key=bc_losses.get)
-    print(f"Dominant Boundary Condition: {dominant_bc} ({bc_losses[dominant_bc]:.2e})")
+    tqdm.write(f"Dominant Boundary Condition: {dominant_bc} ({bc_losses[dominant_bc]:.2e})")
 
 if __name__ == "__main__":
     main()
