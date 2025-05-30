@@ -19,12 +19,12 @@ class Swish(nn.Module):
 class FFN(nn.Module):
     """Fully Connected Feed Forward Neural Net"""
 
-    def __init__(self, cfg, input_dim=2, output_dim=1):
+    def __init__(self, cfg, input_dim=2, output_dim=1,hidden_layers=5,layer_size=20):
         super(FFN, self).__init__()
         self.input_dim = input_dim
         self.output_dim = output_dim
-        self.num_layers = cfg.nr_layers
-        self.layer_size = cfg.layer_size
+        self.num_layers = hidden_layers
+        self.layer_size = layer_size
 
         self.activation = Swish()
 
@@ -55,12 +55,13 @@ class Pinnacle():
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         # Create networks eaach having inputs x,t and outputs their name sake
-        self.potential_net = FFN(cfg.arch.fully_connected, input_dim=2, output_dim=1).to(self.device)
+        self.potential_net = FFN(cfg.arch.fully_connected, input_dim=2, output_dim=1,layer_size=self.cfg.arch.potential.layer_size,hidden_layers=self.cfg.arch.potential.hidden_layers).to(self.device)
         # Need to create a seperate net for the concenration of every species of interest
-        self.CV_net = FFN(cfg.arch.fully_connected, input_dim=2, output_dim=1).to(self.device)  # Cation Vacany
-        self.AV_net = FFN(cfg.arch.fully_connected, input_dim=2, output_dim=1).to(self.device)  # Anion Vacancy
-        self.h_net = FFN(cfg.arch.fully_connected, input_dim=2, output_dim=1).to(self.device)  # Hole
-        self.L_net = FFN(cfg.arch.fully_connected, input_dim=1, output_dim=1).to(self.device)  # Film Thickness
+        self.CV_net = FFN(cfg.arch.fully_connected, input_dim=2, output_dim=1,layer_size=self.cfg.arch.CV.layer_size,hidden_layers=self.cfg.arch.CV.hidden_layers).to(self.device)  # Cation Vacany
+        self.AV_net = FFN(cfg.arch.fully_connected, input_dim=2, output_dim=1,layer_size=self.cfg.arch.AV.layer_size,hidden_layers=self.cfg.arch.AV.hidden_layers).to(self.device)  # Anion Vacancy
+        self.h_net = FFN(cfg.arch.fully_connected, input_dim=2, output_dim=1,layer_size=self.cfg.arch.h.layer_size,hidden_layers=self.cfg.arch.h.hidden_layers).to(self.device)  # Hole
+        self.L_net = FFN(cfg.arch.fully_connected, input_dim=1, output_dim=1,layer_size=self.cfg.arch.L.layer_size,hidden_layers=self.cfg.arch.L.hidden_layers).to(self.device)  # Film Thickness
+
 
         # Physics constants
         self.F = cfg.pde.physics.F
@@ -173,24 +174,34 @@ class Pinnacle():
         # Compute Forward pass
         inputs = torch.cat([x, t], dim=1)  # puts all the input values together into one big list
         u_pred = self.potential_net(inputs)  # Acts the neural networks on the inputs to compute u and c
-        cv_pred = self.CV_net(inputs)
-        av_pred = self.AV_net(inputs)
-        h_pred = self.h_net(inputs)
+        log_cv_pred = self.CV_net(inputs)
+        log_av_pred = self.AV_net(inputs)
+        log_h_pred = self.h_net(inputs)
+
+        #Convert log predictions to real cv for pde calculations
+        cv_pred = torch.exp(log_cv_pred)
+        av_pred = torch.exp(log_av_pred)
+        h_pred = torch.exp(log_h_pred)
+
 
         # Compute all the time derrivatives
-        cv_t = torch.autograd.grad(
-            cv_pred, t, grad_outputs=torch.ones_like(cv_pred),
+        log_cv_t = torch.autograd.grad(
+            log_cv_pred, t, grad_outputs=torch.ones_like(log_cv_pred),
             create_graph=True, retain_graph=True
         )[0]
+        cv_t = cv_pred * log_cv_t
 
-        av_t = torch.autograd.grad(
-            av_pred, t, grad_outputs=torch.ones_like(av_pred),
+        log_av_t = torch.autograd.grad(
+            log_av_pred, t, grad_outputs=torch.ones_like(log_av_pred),
             create_graph=True, retain_graph=True
         )[0]
-        h_t = torch.autograd.grad(
-            h_pred, t, grad_outputs=torch.ones_like(h_pred),
+        av_t = av_pred * log_av_t 
+
+        log_h_t = torch.autograd.grad(
+            log_h_pred, t, grad_outputs=torch.ones_like(log_h_pred),
             create_graph=True, retain_graph=True
         )[0]
+        h_t = log_h_t*h_pred
 
         # Compute all the derrivatives we need w.r.t x (c derrivatives w.r.t calculated once here and then second calculated when we calculate the flux)
         u_x = torch.autograd.grad(
@@ -198,37 +209,52 @@ class Pinnacle():
             create_graph=True, retain_graph=True
         )[0]
 
-        cv_x = torch.autograd.grad(
-            cv_pred, x, grad_outputs=torch.ones_like(cv_pred),
+        log_cv_x = torch.autograd.grad(
+            log_cv_pred, x, grad_outputs=torch.ones_like(log_cv_pred),
             create_graph=True, retain_graph=True
         )[0]
 
-        av_x = torch.autograd.grad(
-            av_pred, x, grad_outputs=torch.ones_like(av_pred),
+        cv_x = cv_pred*log_cv_x
+
+        log_av_x = torch.autograd.grad(
+            log_av_pred, x, grad_outputs=torch.ones_like(log_av_pred),
             create_graph=True, retain_graph=True
         )[0]
-        h_x = torch.autograd.grad(
-            h_pred, x, grad_outputs=torch.ones_like(h_pred),
+
+        av_x = av_pred*log_av_x
+
+        log_h_x = torch.autograd.grad(
+            log_h_pred, x, grad_outputs=torch.ones_like(log_h_pred),
             create_graph=True, retain_graph=True
         )[0]
+
+        h_x = h_pred*log_h_x
 
         # Second Derrivatives
         u_xx = torch.autograd.grad(
             u_x, x, grad_outputs=torch.ones_like(u_x),
             create_graph=True, retain_graph=True
         )[0]
-        cv_xx = torch.autograd.grad(
-            cv_x, x, grad_outputs=torch.ones_like(cv_x),
+        log_cv_xx = torch.autograd.grad(
+            log_cv_x, x, grad_outputs=torch.ones_like(log_cv_x),
             create_graph=True, retain_graph=True
         )[0]
-        av_xx = torch.autograd.grad(
-            av_x, x, grad_outputs=torch.ones_like(av_x),
+
+        cv_xx = cv_pred*(log_cv_x**2+log_cv_xx)
+
+        log_av_xx = torch.autograd.grad(
+            log_av_x, x, grad_outputs=torch.ones_like(log_av_x),
             create_graph=True, retain_graph=True
         )[0]
-        h_xx = torch.autograd.grad(
-            h_x, x, grad_outputs=torch.ones_like(h_x),
+
+        av_xx = av_pred*(log_av_x**2+log_av_xx)
+
+        log_h_xx = torch.autograd.grad(
+            log_h_x, x, grad_outputs=torch.ones_like(log_h_x),
             create_graph=True, retain_graph=True
         )[0]
+
+        h_xx = h_pred*(log_h_x**2+log_h_xx)
 
         return u_pred, cv_pred, av_pred, h_pred, cv_t, av_t, h_t, u_x, cv_x, av_x, h_x, u_xx, cv_xx, av_xx, h_xx
 
@@ -242,7 +268,7 @@ class Pinnacle():
 
         cd_av_residual = av_t + (-self.D_av * av_xx) + (-self.U_av * u_x * av_x) - (self.U_av * av_pred * u_xx)
 
-        cd_h_residual = h_t + (-self.D_h * h_xx) + (-self.F * self.D_h * (1 / self.R * self.T) * u_x * h_x) - (self.F * self.D_h * (1 / self.R * self.T) * h_pred * u_xx)  # Different from ion convection-diffusion, we are ignoring recombination terms as a simpllifying assumtpion
+        cd_h_residual = h_t + (-self.D_h * h_xx) + (-self.F * self.D_h * (1 / (self.R * self.T)) * u_x * h_x) - (self.F * self.D_h * (1 / (self.R * self.T)) * h_pred * u_xx)  # Different from ion convection-diffusion, we are ignoring recombination terms as a simpllifying assumtpion
 
         # Poisson Residual Calculation
 
@@ -252,39 +278,19 @@ class Pinnacle():
 
     def L_loss(self):
         """Enforce dL/dt = Ω(k2 - k5)"""
+        t = torch.rand(self.cfg.batch_size.film_thickness,1,device=self.device,requires_grad=True) * self.time_scale
 
-        L_loss_time_series = []
-        time_steps = torch.linspace(0.0,self.time_scale,self.cfg.batch_size.temporal,device=self.device)
-        for index,t_i in enumerate(time_steps):
-            t = torch.ones(self.cfg.batch_size.film_thickness,1,device=self.device,requires_grad=True) * t_i
+        L_pred = self.L_net(t)
 
-            L_pred = self.L_net(t)
+        dL_dt = torch.autograd.grad(L_pred,t,grad_outputs=torch.ones_like(L_pred),create_graph=True,retain_graph=True)[0]
 
-            dL_dt = torch.autograd.grad(L_pred,t,grad_outputs=torch.ones_like(L_pred),create_graph=True,retain_graph=True)[0]
+        # Get rate constants (using predicted L for f/s boundary)
 
-            # Get rate constants (using predicted L for f/s boundary)
-            k1, k2, k3, k4, k5, ktp, ko2 = self.compute_rate_constants(t)
+        k1, k2, k3, k4, k5, ktp, ko2 = self.compute_rate_constants(t)
 
-            dL_dt_physics = self.Omega * (k2 - k5)
+        dL_dt_physics = self.Omega * (k2 - k5)
 
-            L_loss_ti = torch.mean( (dL_dt - dL_dt_physics)**2 )
-
-            L_loss_time_series.append(L_loss_ti)
-
-        L_loss_time_series_tensor = torch.FloatTensor(L_loss_time_series)
-
-        L_loss = 0.0
-        for index,i in enumerate(L_loss_time_series):
-            #need a list of all the losses up until i-1?
-            if index> 0:
-                previous_index = index-1
-            else:
-                previous_index = 0
-
-            w_i = torch.exp(-self.cfg.training.causal*torch.sum(L_loss_time_series_tensor[:previous_index])) #Causaulity Weight
-            L_loss += (1/self.cfg.batch_size.temporal)*w_i*L_loss_time_series_tensor[index]
-
-        return L_loss
+        return torch.mean((dL_dt - dL_dt_physics)**2)
 
     def get_E_ext(self, t):
         """Dummy function for external potential - will implement sweeping later"""
@@ -292,7 +298,6 @@ class Pinnacle():
         return self.E_ext  # For now just return constant value
 
     def compute_rate_constants(self,t):
-        
         # Predict the potential on the m/f (x=0) boundary
         x_mf = torch.zeros(self.cfg.batch_size.rate, 1, device=self.device)
         inputs_mf = torch.cat([x_mf, t], dim=1)
@@ -334,25 +339,26 @@ class Pinnacle():
 
     def initial_condition_loss(self):
         """Compute initial condition losses with individual tracking"""
-        
         t = torch.zeros(self.cfg.batch_size.IC, 1, device=self.device)
-        x = torch.rand(self.cfg.batch_size.IC, 1, device=self.device) * self.L_initial #Would it be better to change this to L_pred at t=0? vs hard enforcing this?, also we could change the way we are sampling? 
+        L_initial_pred = self.L_net(t)
+        x = torch.rand(self.cfg.batch_size.IC, 1, device=self.device) * L_initial_pred #self.L_initial #Would it be better to change this to L_pred at t=0? vs hard enforcing this?, also we could change the way we are sampling? 
         t.requires_grad_(True)
         inputs = torch.cat([x, t], dim=1)
 
         # Initial Conditions for film thickness
-        L_initial_pred = self.L_net(t)
         L_initial_loss = torch.mean((L_initial_pred - self.L_initial)**2)
 
         # Cation Vacancy Initial Conditions
-        cv_initial_pred = self.CV_net(inputs)
-        cv_initial_t = torch.autograd.grad(cv_initial_pred, t, grad_outputs=torch.ones_like(cv_initial_pred), retain_graph=True, create_graph=True)[0]
-        cv_initial_loss = torch.mean(cv_initial_pred ** 2) + torch.mean(cv_initial_t ** 2)
+        log_cv_initial_pred = self.CV_net(inputs)
+        log_cv_initial_t = torch.autograd.grad(log_cv_initial_pred, t, grad_outputs=torch.ones_like(log_cv_initial_pred), retain_graph=True, create_graph=True)[0]
+        cv_initial_pred = torch.exp(log_cv_initial_pred)
+        cv_initial_loss = torch.mean((cv_initial_pred)** 2) + torch.mean(log_cv_initial_t ** 2) #Equivalent initial conditions in terms of log(c)
 
         # Anion Vacancy Initial Conditions
-        av_initial_pred = self.AV_net(inputs)
-        av_initial_t = torch.autograd.grad(av_initial_pred, t, grad_outputs=torch.ones_like(av_initial_pred), retain_graph=True, create_graph=True)[0]
-        av_initial_loss = torch.mean(av_initial_pred ** 2) + torch.mean(av_initial_t ** 2)
+        log_av_initial_pred = self.AV_net(inputs)
+        log_av_initial_t = torch.autograd.grad(log_av_initial_pred, t, grad_outputs=torch.ones_like(log_av_initial_pred), retain_graph=True, create_graph=True)[0]
+        av_initial_pred = torch.exp(log_av_initial_pred)
+        av_initial_loss = torch.mean((av_initial_pred)** 2) + torch.mean(log_av_initial_t ** 2) #Equivalent initial conditions in terms of log(c)
 
         # Potential Initial Conditions
         u_initial_pred = self.potential_net(inputs)
@@ -360,9 +366,9 @@ class Pinnacle():
         poisson_initial_loss = torch.mean((u_initial_pred - (self.E_ext - 1e7 * x)) ** 2) + torch.mean(u_initial_t ** 2) #This is very stiff! 
 
         # Hole Initial Conditions
-        h_initial_pred = self.h_net(inputs)
-        h_initial_t = torch.autograd.grad(h_initial_pred, t, grad_outputs=torch.ones_like(h_initial_pred), retain_graph=True, create_graph=True)[0]
-        h_initial_loss = torch.mean((h_initial_pred - self.c_h0) ** 2) + torch.mean(h_initial_t ** 2)#Also very stiff
+        log_h_initial_pred = self.h_net(inputs)
+        log_h_initial_t = torch.autograd.grad(log_h_initial_pred, t, grad_outputs=torch.ones_like(log_h_initial_pred), retain_graph=True, create_graph=True)[0]
+        h_initial_loss = torch.mean((log_h_initial_pred - torch.log(torch.ones_like(log_h_initial_pred)*self.c_h0)) ** 2) + torch.mean(log_h_initial_t ** 2)
 
         total_initial_loss = cv_initial_loss + av_initial_loss + poisson_initial_loss + h_initial_loss + L_initial_loss
 
@@ -370,213 +376,120 @@ class Pinnacle():
 
     def boundary_loss(self):
         """Compute boundary losses with individual tracking"""
-    
-        cv_cd_mf_loss_time_series = []
-        cv_cd_fs_loss_time_series = []
-        av_cd_mf_loss_time_series = []
-        av_cd_fs_loss_time_series = []
-        h_cd_fs_loss_time_series = []
-        poisson_mf_loss_time_series = []
-        poisson_fs_loss_time_series = []
 
+        t = torch.ones(self.cfg.batch_size.BC,1,device=self.device,requires_grad=True)*self.time_scale
+        k1, k2, k3, k4, k5, ktp, ko2 = self.compute_rate_constants(t)
+        # m/f interface conditions
+        x_mf = torch.zeros(self.cfg.batch_size.BC, 1, device=self.device)
+        x_mf.requires_grad_(True)
 
-        time_steps = torch.linspace(0.0,self.time_scale,self.cfg.batch_size.temporal,device=self.device)
-        for index,t_i in enumerate(time_steps):
-            
-            #Generate a t tensor for this time step
-            t = torch.ones(self.cfg.batch_size.BC,1,device=self.device,requires_grad=True)*t_i
-            k1, k2, k3, k4, k5, ktp, ko2 = self.compute_rate_constants(t)
-            # m/f interface conditions
-            x_mf = torch.zeros(self.cfg.batch_size.BC, 1, device=self.device)
-            x_mf.requires_grad_(True)
+        inputs_mf = torch.cat([x_mf, t], dim=1)
+        # Predicting the potential at m/f interface
+        u_pred_mf = self.potential_net(inputs_mf)
+        u_pred_mf_x = torch.autograd.grad(u_pred_mf, x_mf, grad_outputs=torch.ones_like(u_pred_mf), retain_graph=True, create_graph=True)[0]
 
-            inputs_mf = torch.cat([x_mf, t], dim=1)
-            # Predicting the potential at m/f interface
-            u_pred_mf = self.potential_net(inputs_mf)
-            u_pred_mf_x = torch.autograd.grad(u_pred_mf, x_mf, grad_outputs=torch.ones_like(u_pred_mf), retain_graph=True, create_graph=True)[0]
+        # cv at m/f conditions
+        log_cv_pred_mf = self.CV_net(inputs_mf)
+        log_cv_pred_mf_x = torch.autograd.grad(log_cv_pred_mf, x_mf, grad_outputs=torch.ones_like(log_cv_pred_mf), retain_graph=True, create_graph=True)[0] 
+        cv_pred_mf = torch.exp(log_cv_pred_mf)
+        cv_pred_mf_x = cv_pred_mf*log_cv_pred_mf_x
+        #Predict L to use in caclulating BC's
+        L_pred = self.L_net(t)
+        L_pred_t = torch.autograd.grad(L_pred,t,grad_outputs=torch.ones_like(L_pred),retain_graph=True,create_graph=True)[0]
+        
+        q1 = self.k1_0* torch.exp(self.alpha_cv*(self.E_ext-u_pred_mf)) + self.U_cv*u_pred_mf_x  - L_pred_t #(self.Omega*(k2-k5)) #analytic enforcing might be stiff
+        cv_mf_loss = torch.mean((-self.D_cv*cv_pred_mf_x +q1*cv_pred_mf)**2)
 
-            # cv at m/f conditions
-            cv_pred_mf = self.CV_net(inputs_mf)
-            cv_pred_mf_x = torch.autograd.grad(cv_pred_mf, x_mf, grad_outputs=torch.ones_like(cv_pred_mf), retain_graph=True, create_graph=True)[0] 
+        # av at m/f conditions 
+        log_av_pred_mf = self.AV_net(inputs_mf)
+        log_av_pred_mf_x = torch.autograd.grad(log_av_pred_mf, x_mf, grad_outputs=torch.ones_like(log_av_pred_mf), retain_graph=True, create_graph=True)[0] 
+        av_pred_mf = torch.exp(log_av_pred_mf)
+        av_pred_mf_x = av_pred_mf*log_av_pred_mf_x
+        g2 = (4/3)*self.k2_0*torch.exp(self.alpha_av*(self.E_ext-u_pred_mf))
+        q2 = -1*self.U_av*u_pred_mf_x - L_pred_t #(self.Omega*(k2-k5)) #analytic enforcing might be stiff
 
-            #Predict L to use in caclulating BC's
-            L_pred = self.L_net(t)
-            L_pred_t = torch.autograd.grad(L_pred,t,grad_outputs=torch.ones_like(L_pred),retain_graph=True,create_graph=True)[0]
-            
-            q1 = self.k1_0* torch.exp(self.alpha_cv*(self.E_ext-u_pred_mf)) + self.U_cv*u_pred_mf_x  - L_pred_t #(self.Omega*(k2-k5)) #analytic enforcing might be stiff
-            cv_mf_loss_ti = torch.mean((-self.D_cv*cv_pred_mf_x +q1*cv_pred_mf)**2)
+        av_mf_loss = torch.mean((self.D_av*av_pred_mf_x -g2 +q2*av_pred_mf)**2)
 
-            # av at m/f conditions 
-            av_pred_mf = self.AV_net(inputs_mf)
-            av_pred_mf_x = torch.autograd.grad(av_pred_mf, x_mf, grad_outputs=torch.ones_like(av_pred_mf), retain_graph=True, create_graph=True)[0] 
+        # potential at m/f conditions
+        g3 = self.eps_Ddl* ((u_pred_mf-self.E_ext)/self.d_Ddl)
 
-            g2 = (4/3)*self.k2_0*torch.exp(self.alpha_av*(self.E_ext-u_pred_mf))
-            q2 = -1*self.U_av*u_pred_mf_x - L_pred_t #(self.Omega*(k2-k5)) #analytic enforcing might be stiff
+        u_mf_loss = torch.mean((-self.epsilonf*u_pred_mf_x -g3)**2)
 
-            av_mf_loss_ti = torch.mean((self.D_av*av_pred_mf_x -g2 +q2*av_pred_mf)**2)
+        # f/s interface conditions
+        x_fs = torch.ones(self.cfg.batch_size.BC, 1, device=self.device)*L_pred
+        inputs_fs = torch.cat([x_fs, t], dim=1)
+        
+        # Predicting the potential at f/s
+        u_pred_fs = self.potential_net(inputs_fs)
+        u_pred_fs_x = torch.autograd.grad(u_pred_fs, x_fs, grad_outputs=torch.ones_like(u_pred_fs), retain_graph=True, create_graph=True)[0]
 
-            # potential at m/f conditions
-            g3 = self.eps_Ddl* ((u_pred_mf-self.E_ext)/self.d_Ddl)
+        # cv at f/s conditions
+        log_cv_pred_fs = self.CV_net(inputs_fs)
+        log_cv_pred_fs_x = torch.autograd.grad(log_cv_pred_fs, x_fs, grad_outputs=torch.ones_like(log_cv_pred_fs), retain_graph=True, create_graph=True)[0] 
+        cv_pred_fs = torch.exp(log_cv_pred_fs)
+        cv_pred_fs_x = cv_pred_fs*log_cv_pred_fs_x
 
-            u_mf_loss_ti = torch.mean((-self.epsilonf*u_pred_mf_x -g3)**2)
+        g4 = -1*self.k3_0*torch.exp(self.beta_cv*u_pred_fs)
+        q4 = -1*self.U_cv*u_pred_fs_x
+        
+        cv_fs_loss = torch.mean((-self.D_cv*cv_pred_fs_x -g4 + q4*cv_pred_fs)**2)
 
-            # f/s interface conditions
-            x_fs = torch.ones(self.cfg.batch_size.BC, 1, device=self.device)*L_pred
-            inputs_fs = torch.cat([x_fs, t], dim=1)
-            
-            # Predicting the potential at f/s
-            u_pred_fs = self.potential_net(inputs_fs)
-            u_pred_fs_x = torch.autograd.grad(u_pred_fs, x_fs, grad_outputs=torch.ones_like(u_pred_fs), retain_graph=True, create_graph=True)[0]
+        # av at f/s conditions
+        log_av_pred_fs = self.AV_net(inputs_fs)
+        log_av_pred_fs_x = torch.autograd.grad(log_av_pred_fs, x_fs, grad_outputs=torch.ones_like(log_av_pred_fs), retain_graph=True, create_graph=True)[0] 
+        av_pred_fs = torch.exp(log_av_pred_fs)
+        av_pred_fs_x = av_pred_fs*log_av_pred_fs_x
 
-            # cv at f/s conditions
-            cv_pred_fs = self.CV_net(inputs_fs)
-            cv_pred_fs_x = torch.autograd.grad(cv_pred_fs, x_fs, grad_outputs=torch.ones_like(cv_pred_fs), retain_graph=True, create_graph=True)[0] 
+        q5 = -1*(self.k4_0*torch.exp(self.alpha_av*u_pred_fs) + self.U_av*u_pred_fs_x)
+        
+        av_fs_loss = torch.mean((-self.D_av*av_pred_fs_x + q5*av_pred_fs)**2)
 
-            g4 = -1*self.k3_0*torch.exp(self.beta_cv*u_pred_fs)
-            q4 = -1*self.U_cv*u_pred_fs_x
-            
-            cv_fs_loss_ti = torch.mean((-self.D_cv*cv_pred_fs_x -g4 + q4*cv_pred_fs)**2)
+        # hole at f/s conditions
+        log_h_pred_fs = self.h_net(inputs_fs)
+        log_h_pred_fs_x = torch.autograd.grad(log_h_pred_fs, x_fs, grad_outputs=torch.ones_like(log_h_pred_fs), retain_graph=True, create_graph=True)[0] 
+        h_pred_fs = torch.exp(log_h_pred_fs)
+        h_pred_fs_x = h_pred_fs*log_h_pred_fs
 
-            # av at f/s conditions
-            av_pred_fs = self.AV_net(inputs_fs)
-            av_pred_fs_x = torch.autograd.grad(av_pred_fs, x_fs, grad_outputs=torch.ones_like(av_pred_fs), retain_graph=True, create_graph=True)[0] 
+        hole_threshold = 1e-9
+        mask = h_pred_fs > hole_threshold
+        g6 = torch.zeros_like(h_pred_fs)
+        q6 = torch.where(mask, (self.ktp_0 + (self.F*self.D_h)/(self.R*self.T)*u_pred_fs_x), torch.zeros_like(h_pred_fs)) #Might also be very stiff, maybe change? 
 
-            q5 = -1*(self.k4_0*torch.exp(self.alpha_av*u_pred_fs) + self.U_av*u_pred_fs_x)
-            
-            av_fs_loss_ti = torch.mean((-self.D_av*av_pred_fs_x + q5*av_pred_fs)**2)
+        h_fs_loss = torch.mean((-self.D_h*h_pred_fs_x -g6 +q6*h_pred_fs)**2)
 
-            # hole at f/s conditions
-            h_pred_fs = self.h_net(inputs_fs)
-            h_pred_fs_x = torch.autograd.grad(h_pred_fs, x_fs, grad_outputs=torch.ones_like(h_pred_fs), retain_graph=True, create_graph=True)[0] 
-
-            hole_threshold = 1e-9
-            mask = h_pred_fs > hole_threshold
-            g6 = torch.zeros_like(h_pred_fs)
-            q6 = torch.where(mask, (self.ktp_0 + (self.F*self.D_h)/(self.R*self.T)*u_pred_fs_x), torch.zeros_like(h_pred_fs)) #Might also be very stiff, maybe change? 
-
-            h_fs_loss_ti = torch.mean((-self.D_h*h_pred_fs_x -g6 +q6*h_pred_fs)**2)
-
-            # Potential at f/s loss
-            r = -self.d_Ddl*(self.eps_film/self.eps_Ddl)*u_pred_fs_x - self.d_dl*(self.eps_film/self.eps_dl)*u_pred_fs_x
-            u_fs_loss_ti = torch.mean((u_pred_fs - r)**2)
-
-            cv_cd_mf_loss_time_series.append(cv_mf_loss_ti)
-            cv_cd_fs_loss_time_series.append(cv_fs_loss_ti)
-            av_cd_mf_loss_time_series.append(av_mf_loss_ti)
-            av_cd_fs_loss_time_series.append(av_fs_loss_ti)
-            h_cd_fs_loss_time_series.append(h_fs_loss_ti)
-            poisson_mf_loss_time_series.append(u_mf_loss_ti)
-            poisson_fs_loss_time_series.append(u_fs_loss_ti)
-
-        cv_cd_mf_loss_time_series_tensor = torch.FloatTensor(cv_cd_mf_loss_time_series)
-        cv_cd_fs_loss_time_series_tensor = torch.FloatTensor(cv_cd_fs_loss_time_series)
-        av_cd_mf_loss_time_series_tensor = torch.FloatTensor(av_cd_mf_loss_time_series)
-        av_cd_fs_loss_time_series_tensor = torch.FloatTensor(av_cd_fs_loss_time_series)
-        h_cd_fs_loss_time_series_tensor = torch.FloatTensor(h_cd_fs_loss_time_series)
-        poisson_mf_loss_time_series_tensor = torch.FloatTensor(poisson_mf_loss_time_series)
-        poisson_fs_loss_time_series_tensor = torch.FloatTensor(poisson_fs_loss_time_series)
-
-        cv_mf_loss = 0.0
-        cv_fs_loss = 0.0
-        av_mf_loss = 0.0
-        av_fs_loss = 0.0
-        h_fs_loss = 0.0
-        u_mf_loss = 0.0
-        u_fs_loss = 0.0
-        for index,i in enumerate(cv_cd_mf_loss_time_series):
-            if index> 0:
-                previous_index = index-1
-            else:
-                previous_index = 0
-
-            w_i_cv_mf= torch.exp(-self.cfg.training.causal*torch.sum(cv_cd_mf_loss_time_series_tensor[:previous_index])) #Causality Weight
-            cv_mf_loss += (1/self.cfg.batch_size.temporal)*w_i_cv_mf*cv_cd_mf_loss_time_series_tensor[index] #Time average?
-
-            w_i_cv_fs= torch.exp(-self.cfg.training.causal*torch.sum(cv_cd_fs_loss_time_series_tensor[:previous_index])) #Causality Weight
-            cv_fs_loss += (1/self.cfg.batch_size.temporal)*w_i_cv_fs*cv_cd_fs_loss_time_series_tensor[index]
-
-            w_i_av_mf= torch.exp(-self.cfg.training.causal*torch.sum(av_cd_mf_loss_time_series_tensor[:previous_index])) #Causality Weight
-            av_mf_loss += (1/self.cfg.batch_size.temporal)*w_i_av_mf*av_cd_mf_loss_time_series_tensor[index]
-
-            w_i_av_fs= torch.exp(-self.cfg.training.causal*torch.sum(av_cd_fs_loss_time_series_tensor[:previous_index])) #Causality Weight
-            av_fs_loss += (1/self.cfg.batch_size.temporal)*w_i_av_fs*av_cd_fs_loss_time_series_tensor[index]
-
-            w_i_h_fs= torch.exp(-self.cfg.training.causal*torch.sum(h_cd_fs_loss_time_series_tensor[:previous_index])) #Causality Weight
-            h_fs_loss += (1/self.cfg.batch_size.temporal)*w_i_h_fs*h_cd_fs_loss_time_series_tensor[index]
-
-            w_i_u_mf= torch.exp(-self.cfg.training.causal*torch.sum(poisson_mf_loss_time_series_tensor[:previous_index])) #Causality Weight
-            u_mf_loss += (1/self.cfg.batch_size.temporal)*w_i_u_mf*poisson_mf_loss_time_series_tensor[index]
-            
-            w_i_u_fs= torch.exp(-self.cfg.training.causal*torch.sum(poisson_fs_loss_time_series_tensor[:previous_index])) #Causality Weight
-            u_fs_loss += (1/self.cfg.batch_size.temporal)*w_i_u_fs*poisson_fs_loss_time_series_tensor[index]
-
+        # Potential at f/s loss
+        r = -self.d_Ddl*(self.eps_film/self.eps_Ddl)*u_pred_fs_x - self.d_dl*(self.eps_film/self.eps_dl)*u_pred_fs_x
+        u_fs_loss = torch.mean((u_pred_fs - r)**2)
 
         total_BC_loss = cv_mf_loss + av_mf_loss + u_mf_loss + cv_fs_loss + av_fs_loss + u_fs_loss + h_fs_loss
 
         return total_BC_loss, cv_mf_loss, av_mf_loss, u_mf_loss, cv_fs_loss, av_fs_loss, u_fs_loss, h_fs_loss
-
     def interior_loss(self):
         """Compute PDE residuals on interior points with individual tracking"""
-        
-        #Create a set of time_steps to iterate over
-        time_steps = torch.linspace(0.0,self.time_scale,self.cfg.batch_size.temporal,device=self.device)
-        
-        cv_cd_loss_time_series = []
-        av_cd_loss_time_series = []
-        h_cd_loss_time_series = []
-        poisson_loss_time_series = []
+    
+        # Sample interior points
+        t = torch.rand(self.cfg.batch_size.interior, 1, device=self.device) * self.time_scale
 
-        for i,t_i in enumerate(time_steps):
-            
-            t = torch.ones(self.cfg.batch_size.interior,1,device=self.device)*t_i
-            L_pred = self.L_net(t)
-            x = torch.rand(self.cfg.batch_size.interior, 1, device=self.device) * L_pred 
+        L_pred = self.L_net(t)
 
-            # Compute PDE residuals for this time_step
-            cd_cv_residual, cd_av_residual, cd_h_residual, poisson_residual = self.pde_residuals(x, t)
-        
-            # Calculate individual PDE losses
-            cv_pde_loss_ti = torch.mean(cd_cv_residual**2)
-            av_pde_loss_ti = torch.mean(cd_av_residual**2)
-            h_pde_loss_ti = torch.mean(cd_h_residual**2)
-            poisson_pde_loss_ti = torch.mean(poisson_residual**2)
-        
-            cv_cd_loss_time_series.append(cv_pde_loss_ti) #need this to be a tensor and not a list
-            av_cd_loss_time_series.append(av_pde_loss_ti)
-            h_cd_loss_time_series.append(h_pde_loss_ti)
-            poisson_loss_time_series.append(poisson_pde_loss_ti)
+        x = torch.rand(self.cfg.batch_size.interior, 1, device=self.device) * L_pred 
 
-            
-        cv_cd_loss_time_series_tensor = torch.FloatTensor(cv_cd_loss_time_series)
-        av_cd_loss_time_series_tensor=torch.FloatTensor(av_cd_loss_time_series)
-        h_cd_loss_time_series_tensor=torch.FloatTensor(h_cd_loss_time_series)
-        poisson_loss_time_series_tensor=torch.FloatTensor(poisson_loss_time_series)
-        cv_cd_weighted_loss = 0.0 
-        av_cv_weighted_loss = 0.0 
-        h_cv_weighted_loss = 0.0
-        poisson_weighted_loss = 0.0  
-        for index,i in enumerate(cv_cd_loss_time_series):
-            #need a list of all the losses up until i-1?
-            if index> 0:
-                previous_index = index-1
-            else:
-                previous_index = 0
-            w_i_cv= torch.exp(-self.cfg.training.causal*torch.sum(cv_cd_loss_time_series_tensor[:previous_index])) #Causaulity Weight
-            cv_cd_weighted_loss += (1/self.cfg.batch_size.temporal)*w_i_cv*cv_cd_loss_time_series_tensor[index]
-        
-            w_i_av= torch.exp(-self.cfg.training.causal*torch.sum(av_cd_loss_time_series_tensor[:previous_index])) #Causaulity Weight
-            av_cv_weighted_loss += (1/self.cfg.batch_size.temporal)*w_i_av*av_cd_loss_time_series_tensor[index]
+        # Compute PDE residuals
+        cd_cv_residual, cd_av_residual, cd_h_residual, poisson_residual = self.pde_residuals(x, t)
 
-            w_i_h= torch.exp(-self.cfg.training.causal*torch.sum(h_cd_loss_time_series_tensor[:previous_index])) #Causaulity Weight
-            h_cv_weighted_loss += (1/self.cfg.batch_size.temporal)*w_i_h*h_cd_loss_time_series_tensor[index]
+        # Calculate individual PDE losses
+        cv_pde_loss = torch.mean(cd_cv_residual**2)
 
-            w_i_poi= torch.exp(-self.cfg.training.causal*torch.sum(poisson_loss_time_series_tensor[:previous_index])) #Causaulity Weight
-            poisson_weighted_loss += (1/self.cfg.batch_size.temporal)*w_i_poi*poisson_loss_time_series_tensor[index]
+        av_pde_loss = torch.mean(cd_av_residual**2)
 
-        total_interior_loss = cv_cd_weighted_loss+av_cv_weighted_loss+h_cv_weighted_loss+poisson_weighted_loss
+        h_pde_loss = torch.mean(cd_h_residual**2)
 
-        return total_interior_loss, cv_cd_weighted_loss,av_cv_weighted_loss,h_cv_weighted_loss,poisson_weighted_loss
+        poisson_pde_loss = torch.mean(poisson_residual**2)
 
+        # Total interior loss
+        total_interior_loss = cv_pde_loss + av_pde_loss + h_pde_loss + poisson_pde_loss
+
+        return total_interior_loss, cv_pde_loss, av_pde_loss, h_pde_loss, poisson_pde_loss
 
     def total_loss(self):
         """Compute total weighted loss with detailed breakdown"""
@@ -757,21 +670,21 @@ class Pinnacle():
             im2 = axes[0,1].contourf(X_np, T_np, cv_np, levels=20, cmap='Reds')
             axes[0,1].set_xlabel('Position')
             axes[0,1].set_ylabel('Time')
-            axes[0,1].set_title('Cation Vacancies c_cv(x,t)')
+            axes[0,1].set_title('Log Cation Vacancies c_cv(x,t)')
             plt.colorbar(im2, ax=axes[0,1])
             
             # 3. Anion vacancies
             im3 = axes[0,2].contourf(X_np, T_np, av_np, levels=20, cmap='Blues')
             axes[0,2].set_xlabel('Position')
             axes[0,2].set_ylabel('Time')
-            axes[0,2].set_title('Anion Vacancies c_av(x,t)')
+            axes[0,2].set_title('Log Anion Vacancies c_av(x,t)')
             plt.colorbar(im3, ax=axes[0,2])
             
             # 4. Holes
             im4 = axes[1,0].contourf(X_np, T_np, h_np, levels=20, cmap='Purples')
             axes[1,0].set_xlabel('Position')
             axes[1,0].set_ylabel('Time')
-            axes[1,0].set_title('Holes c_h(x,t)')
+            axes[1,0].set_title('Log Holes c_h(x,t)')
             plt.colorbar(im4, ax=axes[1,0])
             
             # 5. Film thickness

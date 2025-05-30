@@ -2,8 +2,23 @@
 arch:
   fully_connected:
     # Architecture for both networks
-    layer_size: 20 #per paper
-    nr_layers: 5
+    layer_size: 20  #per paper
+    hidden_layers: 5
+  potential:
+    layer_size: 50
+    hidden_layers: 5
+  CV:
+    layer_size: 20  
+    hidden_layers: 5
+  AV:
+    layer_size: 20  
+    hidden_layers: 5
+  h:
+    layer_size: 20 
+    hidden_layers: 5
+  L:
+    layer_size: 20  
+    hidden_layers: 5
 
 # Optimizer settings
 optimizer:
@@ -17,8 +32,8 @@ optimizer:
 # Learning rate scheduler
 scheduler:
   tf_exponential_lr:
-    decay_rate: 0.95
-    decay_steps: 1000
+    decay_rate: 0.99
+    decay_steps: 10000
 
 # Training settings
 training:
@@ -131,10 +146,10 @@ domain:
   time:
     time_scale: 1
   initial:
-    L_initial: 1.0 # Initial film thickness [m]
+    L_initial: 1e-9 # Initial film thickness [m]
 
 experiment:
-  name: "Full_Causal_Test_1"
+  name: "Converged_Potential_50_neurons"
 
 # Hydra-specific settings
 hydra:
@@ -152,4 +167,4 @@ hydra:
 
 # Add a default run ID that can be overridden
 run:
-  id: 2 # Default run ID, can be overridden via command line
+  id: 1 # Default run ID, can be overridden via command line
