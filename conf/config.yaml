@@ -5,7 +5,7 @@ arch:
     layer_size: 20  #per paper
     hidden_layers: 5
   potential:
-    layer_size: 50
+    layer_size: 20
     hidden_layers: 5
   CV:
     layer_size: 20  
@@ -34,6 +34,11 @@ scheduler:
   tf_exponential_lr:
     decay_rate: 0.99
     decay_steps: 10000
+  RLROP:
+    factor: 0.5
+    patience: 1000
+    threshold: 1e-4
+    min_lr: 1e-6
 
 # Training settings
 training:
@@ -67,7 +72,7 @@ pde:
     T: 293 # Temperature [K]
     k_B: 1.3806e-23 # Boltzmann constant [J/K]
     eps0: 8.85e-12 # Vacuum permittivity [F/m]
-    E_ext: 0.8  # External applied potential [V] - placeholder for now
+    E_ext: 1.0  # External applied potential [V] - placeholder for now
     
     # Diffusion coefficients [m²/s]
     D_cv: 1.0e-21
@@ -149,7 +154,7 @@ domain:
     L_initial: 1e-9 # Initial film thickness [m]
 
 experiment:
-  name: "Converged_Potential_50_neurons"
+  name: "Converged_Test_With_ReduceLRonPlateau"
 
 # Hydra-specific settings
 hydra:

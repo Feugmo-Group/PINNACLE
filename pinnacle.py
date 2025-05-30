@@ -155,11 +155,14 @@ class Pinnacle():
             weight_decay=cfg.optimizer.adam.weight_decay
         )
 
-        # Scheduler/ Same as in PhysicsNEMO for now
-        self.scheduler = optim.lr_scheduler.StepLR(
+        # Scheduler
+        self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
             self.optimizer,
-            step_size=cfg.scheduler.tf_exponential_lr.decay_steps,
-            gamma=cfg.scheduler.tf_exponential_lr.decay_rate
+            mode="min",
+            factor=cfg.scheduler.RLROP.factor,
+            patience=cfg.scheduler.RLROP.patience,
+            threshold=cfg.scheduler.RLROP.threshold,
+            min_lr=cfg.scheduler.RLROP.min_lr,
         )
 
         # Loss weights
@@ -352,13 +355,16 @@ class Pinnacle():
         log_cv_initial_pred = self.CV_net(inputs)
         log_cv_initial_t = torch.autograd.grad(log_cv_initial_pred, t, grad_outputs=torch.ones_like(log_cv_initial_pred), retain_graph=True, create_graph=True)[0]
         cv_initial_pred = torch.exp(log_cv_initial_pred)
-        cv_initial_loss = torch.mean((cv_initial_pred)** 2) + torch.mean(log_cv_initial_t ** 2) #Equivalent initial conditions in terms of log(c)
+        threshold = 1e-3
+        cv_above_threshold = torch.clamp(cv_initial_pred-threshold,min=0)
+        cv_initial_loss = 0.1*torch.mean((cv_above_threshold)** 2) + torch.mean(log_cv_initial_t ** 2) #Equivalent initial conditions in terms of log(c)
 
         # Anion Vacancy Initial Conditions
         log_av_initial_pred = self.AV_net(inputs)
         log_av_initial_t = torch.autograd.grad(log_av_initial_pred, t, grad_outputs=torch.ones_like(log_av_initial_pred), retain_graph=True, create_graph=True)[0]
         av_initial_pred = torch.exp(log_av_initial_pred)
-        av_initial_loss = torch.mean((av_initial_pred)** 2) + torch.mean(log_av_initial_t ** 2) #Equivalent initial conditions in terms of log(c)
+        av_above_threshold = torch.clamp(av_initial_pred-threshold,min=0)
+        av_initial_loss = 0.1*torch.mean((av_above_threshold)** 2) + torch.mean(log_av_initial_t ** 2) #Equivalent initial conditions in terms of log(c)
 
         # Potential Initial Conditions
         u_initial_pred = self.potential_net(inputs)
@@ -542,7 +548,7 @@ class Pinnacle():
         loss_dict = self.total_loss()
         loss_dict['total'].backward() 
         self.optimizer.step()
-        self.scheduler.step()
+        self.scheduler.step(loss_dict['total'])
 
         # Convert all losses to float for logging
         loss_dict_float = {k: v.item() if torch.is_tensor(v) else v for k, v in loss_dict.items()}
