@@ -186,9 +186,9 @@ class Pinnacle():
         log_h_pred = self.h_net(inputs)
 
         #Convert log predictions to real cv for pde calculations
-        cv_pred = torch.exp(log_cv_pred)
-        av_pred = torch.exp(log_av_pred)
-        h_pred = torch.exp(log_h_pred)
+        cv_pred = torch.pow(10,log_cv_pred)
+        av_pred = torch.pow(10,log_av_pred)
+        h_pred = torch.pow(10,log_h_pred)
 
 
         # Compute all the time derrivatives
@@ -401,7 +401,7 @@ class Pinnacle():
         # Cation Vacancy Initial Conditions
         log_cv_initial_pred = self.CV_net(inputs)
         log_cv_initial_t = torch.autograd.grad(log_cv_initial_pred, t, grad_outputs=torch.ones_like(log_cv_initial_pred), retain_graph=True, create_graph=True)[0]
-        cv_initial_pred = torch.exp(log_cv_initial_pred)
+        cv_initial_pred = torch.pow(10,log_cv_initial_pred)
         threshold = 1e-3
         cv_above_threshold = torch.clamp(cv_initial_pred-threshold,min=0)
         cv_initial_loss = 0.1*torch.mean((cv_above_threshold)** 2) + torch.mean(log_cv_initial_t ** 2) #Equivalent initial conditions in terms of log(c)
@@ -409,19 +409,19 @@ class Pinnacle():
         # Anion Vacancy Initial Conditions
         log_av_initial_pred = self.AV_net(inputs)
         log_av_initial_t = torch.autograd.grad(log_av_initial_pred, t, grad_outputs=torch.ones_like(log_av_initial_pred), retain_graph=True, create_graph=True)[0]
-        av_initial_pred = torch.exp(log_av_initial_pred)
+        av_initial_pred = torch.pow(10,log_av_initial_pred)
         av_above_threshold = torch.clamp(av_initial_pred-threshold,min=0)
-        av_initial_loss = torch.mean((av_above_threshold)** 2) + torch.mean(log_av_initial_t ** 2) #Equivalent initial conditions in terms of log(c)
+        av_initial_loss = 0.1*torch.mean((av_above_threshold)** 2) + torch.mean(log_av_initial_t ** 2) #Equivalent initial conditions in terms of log(c)
 
         # Potential Initial Conditions
         u_initial_pred = self.potential_net(inputs)
         u_initial_t = torch.autograd.grad(u_initial_pred, t, grad_outputs=torch.ones_like(u_initial_pred), retain_graph=True, create_graph=True)[0]
-        poisson_initial_loss = 0.01*torch.mean((u_initial_pred - (E - 1e7 * x)) ** 2) + torch.mean(u_initial_t ** 2) #This is very stiff! 
+        poisson_initial_loss = torch.mean((u_initial_pred - E) ** 2) + torch.mean(u_initial_t ** 2) #This is very stiff! so I removed the linear initialization and just made it constant. 
 
         # Hole Initial Conditions
         log_h_initial_pred = self.h_net(inputs)
         log_h_initial_t = torch.autograd.grad(log_h_initial_pred, t, grad_outputs=torch.ones_like(log_h_initial_pred), retain_graph=True, create_graph=True)[0]
-        h_initial_loss = torch.mean((log_h_initial_pred - torch.log(torch.ones_like(log_h_initial_pred)*self.c_h0)) ** 2) + torch.mean(log_h_initial_t ** 2)
+        h_initial_loss = torch.mean((log_h_initial_pred - torch.log10(torch.ones_like(log_h_initial_pred)*self.c_h0)) ** 2) + torch.mean(log_h_initial_t ** 2)
 
         total_initial_loss = cv_initial_loss + av_initial_loss + poisson_initial_loss + h_initial_loss + L_initial_loss
 
@@ -445,7 +445,7 @@ class Pinnacle():
         # cv at m/f conditions
         log_cv_pred_mf = self.CV_net(inputs_mf)
         log_cv_pred_mf_x = torch.autograd.grad(log_cv_pred_mf, x_mf, grad_outputs=torch.ones_like(log_cv_pred_mf), retain_graph=True, create_graph=True)[0] 
-        cv_pred_mf = torch.exp(log_cv_pred_mf)
+        cv_pred_mf = torch.pow(10,log_cv_pred_mf)
         cv_pred_mf_x = cv_pred_mf*log_cv_pred_mf_x
         #Predict L to use in caclulating BC's
         L_inputs = torch.cat([t,E],dim=1)
@@ -458,7 +458,7 @@ class Pinnacle():
         # av at m/f conditions 
         log_av_pred_mf = self.AV_net(inputs_mf)
         log_av_pred_mf_x = torch.autograd.grad(log_av_pred_mf, x_mf, grad_outputs=torch.ones_like(log_av_pred_mf), retain_graph=True, create_graph=True)[0] 
-        av_pred_mf = torch.exp(log_av_pred_mf)
+        av_pred_mf = torch.pow(10,log_av_pred_mf)
         av_pred_mf_x = av_pred_mf*log_av_pred_mf_x
         g2 = (4/3)*self.k2_0*torch.exp(self.alpha_av*(E-u_pred_mf))
         q2 = -1*self.U_av*u_pred_mf_x - L_pred_t #(self.Omega*(k2-k5)) #analytic enforcing might be stiff
@@ -481,7 +481,7 @@ class Pinnacle():
         # cv at f/s conditions
         log_cv_pred_fs = self.CV_net(inputs_fs)
         log_cv_pred_fs_x = torch.autograd.grad(log_cv_pred_fs, x_fs, grad_outputs=torch.ones_like(log_cv_pred_fs), retain_graph=True, create_graph=True)[0] 
-        cv_pred_fs = torch.exp(log_cv_pred_fs)
+        cv_pred_fs = torch.pow(10,log_cv_pred_fs)
         cv_pred_fs_x = cv_pred_fs*log_cv_pred_fs_x
 
         g4 = -1*self.k3_0*torch.exp(self.beta_cv*u_pred_fs)
@@ -492,7 +492,7 @@ class Pinnacle():
         # av at f/s conditions
         log_av_pred_fs = self.AV_net(inputs_fs)
         log_av_pred_fs_x = torch.autograd.grad(log_av_pred_fs, x_fs, grad_outputs=torch.ones_like(log_av_pred_fs), retain_graph=True, create_graph=True)[0] 
-        av_pred_fs = torch.exp(log_av_pred_fs)
+        av_pred_fs = torch.pow(10,log_av_pred_fs)
         av_pred_fs_x = av_pred_fs*log_av_pred_fs_x
 
         q5 = -1*(self.k4_0*torch.exp(self.alpha_av*u_pred_fs) + self.U_av*u_pred_fs_x)
@@ -502,7 +502,7 @@ class Pinnacle():
         # hole at f/s conditions
         log_h_pred_fs = self.h_net(inputs_fs)
         log_h_pred_fs_x = torch.autograd.grad(log_h_pred_fs, x_fs, grad_outputs=torch.ones_like(log_h_pred_fs), retain_graph=True, create_graph=True)[0] 
-        h_pred_fs = torch.exp(log_h_pred_fs)
+        h_pred_fs = torch.pow(10,log_h_pred_fs)
         h_pred_fs_x = h_pred_fs*log_h_pred_fs
 
         hole_threshold = 1e-9
@@ -914,13 +914,16 @@ class Pinnacle():
                 
                 # Get concentrations and rate constants
                 k1, k2, k3, k4, k5, ktp, ko2 = self.compute_rate_constants(t_tensor, E_tensor,single=True)
-                h_fs = torch.exp(self.h_net(inputs_fs))  # Convert from log
-                av_fs = torch.exp(self.AV_net(inputs_fs))
+                h_fs = torch.pow(10,self.h_net(inputs_fs))  # Convert from log
+                av_fs = torch.pow(10,self.AV_net(inputs_fs))
                 u_fs = self.potential_net(inputs_fs)
                 # Calculate current contributions (mol/(m²·s) -> current density)
                 # Convert to A/m² using Faraday constant
+                current_k1 = 
+                current_k2 = 
                 current_k3 = 3 * self.F * k3  # 3 electrons per k3 reaction
-                current_k4 = 2 * self.F * k4 *av_fs  # 2 electrons per k4 reaction  
+                current_k4 = 2 * self.F * k4 * av_fs  # 2 electrons per k4 reaction  
+                current_k5 = 
                 current_ktp = 1 * self.F * ktp * h_fs  # 1 electron per hole Might need a different handling
                 #current_ko2 = 2 * self.F * ko2  # 2 electrons per O2 reaction
                 print(f"At E={E_val:.2f}V:")
@@ -928,7 +931,7 @@ class Pinnacle():
                 print(f"  h_fs: {h_fs.item():.2e}")
                 print(f"  av_fs: {av_fs.item():.2e}")
                 print(f"  k3 raw: {k3.item():.2e}")
-                print(f"  k4 raw: {k4.item():.2e}")
+                print(f"  k4 raw: {k4:.2e}")
                 print(f"  ktp raw: {ktp.item():.2e}")
                 print(f"  exponential arg for k3: {self.beta_cv * (3 - self.delta3) * self.F / (self.R * self.T) * u_fs.item():.2f}")
                 # Total current (can be positive or negative)
@@ -981,9 +984,14 @@ def main(cfg: DictConfig):
     model.AV_net.to(model.device)
     model.h_net.to(model.device)
     model.L_net.to(model.device)
-
+    
+    if hasattr(model, 'best_checkpoint_path') and model.best_checkpoint_path:
+        tqdm.write(f"🔄 Reloading best checkpoint for inference...")
+        model.load_model(model.best_checkpoint_path)
+        tqdm.write(f"✅ Using best model for polarization curve (loss: {model.best_loss:.6f})")
     
     # Create comprehensive loss plots
+    model.visualize_predictions("best")
     plot_detailed_losses(loss_history,cfg.experiment.name)
     E_values, current_values = model.generate_polarization_curve(t_eval=1.0)
 
@@ -992,8 +1000,7 @@ def plot_detailed_losses(loss_history,experiment_name):
     
     # Create output directory
     os.makedirs(f"outputs/plots_{experiment_name}", exist_ok=True)
-    
-    # Plot 1: Main loss components
+    E_maxoss components
     fig, axes = plt.subplots(2, 2, figsize=(15, 12))
     
     # Total and main components
@@ -1002,10 +1009,7 @@ def plot_detailed_losses(loss_history,experiment_name):
     axes[0,0].semilogy(loss_history['boundary'], label='Boundary', alpha=0.8)
     axes[0,0].semilogy(loss_history['initial'], label='Initial', alpha=0.8)
     axes[0,0].semilogy(loss_history['L_physics'], label='Film Thickness', alpha=0.8)
-    axes[0,0].set_title('Main Loss Components')
-    axes[0,0].set_xlabel('Training Step')
-    axes[0,0].set_ylabel('Loss (log scale)')
-    axes[0,0].legend()
+    axes[0,0].set_tE_maxd()
     axes[0,0].grid(True, alpha=0.3)
     
     # PDE residuals breakdown
@@ -1013,7 +1017,7 @@ def plot_detailed_losses(loss_history,experiment_name):
     axes[0,1].semilogy(loss_history['av_pde'], label='AV PDE', alpha=0.8)
     axes[0,1].semilogy(loss_history['h_pde'], label='Hole PDE', alpha=0.8)
     axes[0,1].semilogy(loss_history['poisson_pde'], label='Poisson PDE', alpha=0.8)
-    axes[0,1].set_title('Individual PDE Residuals')
+    axes[0,1].seE_maxt_title('Individual PDE Residuals')
     axes[0,1].set_xlabel('Training Step')
     axes[0,1].set_ylabel('Loss (log scale)')
     axes[0,1].legend()

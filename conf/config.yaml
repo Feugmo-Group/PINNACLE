@@ -74,7 +74,7 @@ pde:
     k_B: 1.3806e-23 # Boltzmann constant [J/K]
     eps0: 8.85e-12 # Vacuum permittivity [F/m]
     E_min: -1.0  # External applied potential [V] - placeholder for now
-    E_max: 1.5
+    E_max: 1.0
     # Diffusion coefficients [m²/s]
     D_cv: 1.0e-21
     D_av: 1.0e-21
@@ -155,7 +155,7 @@ domain:
     L_initial: 1e-9 # Initial film thickness [m]
 
 experiment:
-  name: "Converged"
+  name: "poisson_initial_constant"
 
 # Hydra-specific settings
 hydra:
