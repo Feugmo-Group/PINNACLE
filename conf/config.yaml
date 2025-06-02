@@ -57,6 +57,7 @@ batch_size:
   IC: 1024
   rate: 1024 # For rate constant computation
   film_thickness: 1024 #For Predicting the film_thickness
+  E: 1024 #Number of external potentials to sample within range 
 
 # Custom PDE parameters
 pde:
@@ -72,8 +73,8 @@ pde:
     T: 293 # Temperature [K]
     k_B: 1.3806e-23 # Boltzmann constant [J/K]
     eps0: 8.85e-12 # Vacuum permittivity [F/m]
-    E_ext: 1.0  # External applied potential [V] - placeholder for now
-    
+    E_min: -1.0  # External applied potential [V] - placeholder for now
+    E_max: 1.5
     # Diffusion coefficients [m²/s]
     D_cv: 1.0e-21
     D_av: 1.0e-21
@@ -154,7 +155,7 @@ domain:
     L_initial: 1e-9 # Initial film thickness [m]
 
 experiment:
-  name: "Converged_Test_With_ReduceLRonPlateau"
+  name: "Converged"
 
 # Hydra-specific settings
 hydra:
