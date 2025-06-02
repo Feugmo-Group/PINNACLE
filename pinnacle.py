@@ -9,8 +9,10 @@ import os
 from matplotlib.colors import LinearSegmentedColormap
 from tqdm import tqdm
 import torch.onnx
-import onnx
 import onnxruntime as ort
+
+
+torch.manual_seed(995)#995 is the number stamped onto my necklace
 
 class Swish(nn.Module):
     def forward(self, x):
@@ -55,12 +57,12 @@ class Pinnacle():
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         # Create networks eaach having inputs x,t and outputs their name sake
-        self.potential_net = FFN(cfg.arch.fully_connected, input_dim=2, output_dim=1,layer_size=self.cfg.arch.potential.layer_size,hidden_layers=self.cfg.arch.potential.hidden_layers).to(self.device)
+        self.potential_net = FFN(cfg.arch.fully_connected, input_dim=3, output_dim=1,layer_size=self.cfg.arch.potential.layer_size,hidden_layers=self.cfg.arch.potential.hidden_layers).to(self.device)
         # Need to create a seperate net for the concenration of every species of interest
-        self.CV_net = FFN(cfg.arch.fully_connected, input_dim=2, output_dim=1,layer_size=self.cfg.arch.CV.layer_size,hidden_layers=self.cfg.arch.CV.hidden_layers).to(self.device)  # Cation Vacany
-        self.AV_net = FFN(cfg.arch.fully_connected, input_dim=2, output_dim=1,layer_size=self.cfg.arch.AV.layer_size,hidden_layers=self.cfg.arch.AV.hidden_layers).to(self.device)  # Anion Vacancy
-        self.h_net = FFN(cfg.arch.fully_connected, input_dim=2, output_dim=1,layer_size=self.cfg.arch.h.layer_size,hidden_layers=self.cfg.arch.h.hidden_layers).to(self.device)  # Hole
-        self.L_net = FFN(cfg.arch.fully_connected, input_dim=1, output_dim=1,layer_size=self.cfg.arch.L.layer_size,hidden_layers=self.cfg.arch.L.hidden_layers).to(self.device)  # Film Thickness
+        self.CV_net = FFN(cfg.arch.fully_connected, input_dim=3, output_dim=1,layer_size=self.cfg.arch.CV.layer_size,hidden_layers=self.cfg.arch.CV.hidden_layers).to(self.device)  # Cation Vacany
+        self.AV_net = FFN(cfg.arch.fully_connected, input_dim=3, output_dim=1,layer_size=self.cfg.arch.AV.layer_size,hidden_layers=self.cfg.arch.AV.hidden_layers).to(self.device)  # Anion Vacancy
+        self.h_net = FFN(cfg.arch.fully_connected, input_dim=3, output_dim=1,layer_size=self.cfg.arch.h.layer_size,hidden_layers=self.cfg.arch.h.hidden_layers).to(self.device)  # Hole
+        self.L_net = FFN(cfg.arch.fully_connected, input_dim=2, output_dim=1,layer_size=self.cfg.arch.L.layer_size,hidden_layers=self.cfg.arch.L.hidden_layers).to(self.device)  # Film Thickness
 
 
         # Physics constants
@@ -69,7 +71,6 @@ class Pinnacle():
         self.T = cfg.pde.physics.T
         self.k_B = cfg.pde.physics.k_B
         self.eps0 = cfg.pde.physics.eps0
-        self.E_ext = cfg.pde.physics.E_ext
 
         # Diffusion coefficients
         self.D_cv = cfg.pde.physics.D_cv
@@ -145,6 +146,9 @@ class Pinnacle():
         self.time_scale = cfg.domain.time.time_scale
         self.L_initial = cfg.domain.initial.L_initial
 
+        #training
+        self.best_loss = float('inf')
+
         # Optimizer
         params = list(self.potential_net.parameters()) + list(self.CV_net.parameters()) + list(self.AV_net.parameters()) + list(self.h_net.parameters()) + list(self.L_net.parameters())
         self.optimizer = optim.Adam(
@@ -170,12 +174,12 @@ class Pinnacle():
         #self.nernst_weight = cfg.pde.weights.nernst_weight
         #self.bc_weight = cfg.pde.weights.bc_weight
 
-    def compute_gradients(self, x, t):
+    def compute_gradients(self, x, t, E):
         """Compute the gradients of potential and concentration."""
         x.requires_grad_(True)
         t.requires_grad_(True)
         # Compute Forward pass
-        inputs = torch.cat([x, t], dim=1)  # puts all the input values together into one big list
+        inputs = torch.cat([x, t, E], dim=1)  # puts all the input values together into one big list
         u_pred = self.potential_net(inputs)  # Acts the neural networks on the inputs to compute u and c
         log_cv_pred = self.CV_net(inputs)
         log_av_pred = self.AV_net(inputs)
@@ -262,9 +266,9 @@ class Pinnacle():
         return u_pred, cv_pred, av_pred, h_pred, cv_t, av_t, h_t, u_x, cv_x, av_x, h_x, u_xx, cv_xx, av_xx, h_xx
 
     # enforce alll the pde losses
-    def pde_residuals(self, x, t):
+    def pde_residuals(self, x, t, E):
         """Compute the residuals due to every PDE"""
-        u_pred, cv_pred, av_pred, h_pred, cv_t, av_t,h_t, u_x, cv_x, av_x,h_x, u_xx, cv_xx, av_xx, h_xx = self.compute_gradients(x, t)
+        u_pred, cv_pred, av_pred, h_pred, cv_t, av_t,h_t, u_x, cv_x, av_x,h_x, u_xx, cv_xx, av_xx, h_xx = self.compute_gradients(x,t, E)
 
         # Convection-Diffusion Formulation of Nersnt-Planck
         cd_cv_residual = cv_t + (-self.D_cv * cv_xx) + (-self.U_cv * u_x * cv_x) - (self.U_cv * cv_pred * u_xx)
@@ -282,71 +286,114 @@ class Pinnacle():
     def L_loss(self):
         """Enforce dL/dt = Ω(k2 - k5)"""
         t = torch.rand(self.cfg.batch_size.film_thickness,1,device=self.device,requires_grad=True) * self.time_scale
-
-        L_pred = self.L_net(t)
+        E = torch.rand(self.cfg.batch_size.E,1,device=self.device)*(self.cfg.pde.physics.E_max - self.cfg.pde.physics.E_min) + self.cfg.pde.physics.E_min
+        inputs = torch.cat([t,E],dim=1)
+        L_pred = self.L_net(inputs)
 
         dL_dt = torch.autograd.grad(L_pred,t,grad_outputs=torch.ones_like(L_pred),create_graph=True,retain_graph=True)[0]
 
         # Get rate constants (using predicted L for f/s boundary)
 
-        k1, k2, k3, k4, k5, ktp, ko2 = self.compute_rate_constants(t)
+        k1, k2, k3, k4, k5, ktp, ko2 = self.compute_rate_constants(t,E)
 
         dL_dt_physics = self.Omega * (k2 - k5)
 
         return torch.mean((dL_dt - dL_dt_physics)**2)
 
-    def get_E_ext(self, t):
-        """Dummy function for external potential - will implement sweeping later"""
+    def compute_rate_constants(self,t,E,single=False):
 
-        return self.E_ext  # For now just return constant value
+        if single == True:
+            # Predict the potential on the m/f (x=0) boundary
+            x_mf = torch.zeros(1, 1, device=self.device)  # Single point
+            inputs_mf = torch.cat([x_mf, t, E], dim=1)
+            u_mf = self.potential_net(inputs_mf)
 
-    def compute_rate_constants(self,t):
-        # Predict the potential on the m/f (x=0) boundary
-        x_mf = torch.zeros(self.cfg.batch_size.rate, 1, device=self.device)
-        inputs_mf = torch.cat([x_mf, t], dim=1)
-        u_mf = self.potential_net(inputs_mf)
+            # k1 computation: k1 = k1_0 * exp(alpha_cv * 3F/(RT) * φ_mf)
+            k1 = self.k1_0 * torch.exp(self.alpha_cv * 3 * self.F / (self.R * self.T) * u_mf)
 
-        # k1 computation: k1 = k1_0 * exp(alpha_cv * 3F/(RT) * φ_mf)
-        k1 = self.k1_0 * torch.exp(self.alpha_cv * 3 * self.F / (self.R * self.T) * u_mf)
+            # k2 computation: k2 = k2_0 * exp(alpha_av * 2F/(RT) * φ_mf)
+            k2 = self.k2_0 * torch.exp(self.alpha_av * 2 * self.F / (self.R * self.T) * u_mf)
 
-        # k2 computation: k2 = k2_0 * exp(alpha_av * 2F/(RT) * φ_mf)
-        k2 = self.k2_0 * torch.exp(self.alpha_av * 2 * self.F / (self.R * self.T) * u_mf)
+            #Predict L to use in calculation rate constants
+            L_inputs = torch.cat([t, E], dim=1)
+            L_pred = self.L_net(L_inputs)
 
-        #Predict L to use in calculation rate constants
-        L_pred = self.L_net(t)
+            # Predict the potential on the f/s (x=L) boundary
+            x_fs = L_pred  # This is already [1, 1]
+            inputs_fs = torch.cat([x_fs, t, E], dim=1)
+            u_fs = self.potential_net(inputs_fs)
 
-        # Predict the potential on the f/s (x=L) boundary
-        x_fs = torch.ones(self.cfg.batch_size.rate, 1, device=self.device) * L_pred
-        inputs_fs = torch.cat([x_fs, t], dim=1)
-        u_fs = self.potential_net(inputs_fs)
+            # k3 computation: k3 = k3_0 * exp(beta_cv * (3-δ)F/(RT) * φ_fs)
+            k3 = self.k3_0 * torch.exp(self.beta_cv * (3 - self.delta3) * self.F / (self.R * self.T) * u_fs)
 
-        # k3 computation: k3 = k3_0 * exp(beta_cv * (3-δ)F/(RT) * φ_fs)
-        k3 = self.k3_0 * torch.exp(self.beta_cv * (3 - self.delta3) * self.F / (self.R * self.T) * u_fs)
+            # k4 computation: chemical reaction, potential independent
+            k4 = self.k4_0
 
-        # k4 computation: chemical reaction, potential independent
-        k4 = self.k4_0
+            # k5 computation: k5 = k5_0 * (c_H+)^n, assuming n=1
+            k5 = self.k5_0 * self.c_H
 
-        # k5 computation: k5 = k5_0 * (c_H+)^n, assuming n=1
-        k5 = self.k5_0 * self.c_H
+            # Compute the concentration of holes at the f/s interface
+            c_h_fs = self.h_net(inputs_fs)
 
-        # Compute the concentration of holes at the f/s interface
-        c_h_fs = self.h_net(inputs_fs)
+            # ktp computation: ktp = ktp_0 * c_h * exp(alpha_tp * F/(RT) * φ_fs)
+            ktp = self.ktp_0 * c_h_fs * torch.exp(self.alpha_tp * self.F / (self.R * self.T) * u_fs)
 
-        # ktp computation: ktp = ktp_0 * c_h * exp(alpha_tp * F/(RT) * φ_fs)
-        ktp = self.ktp_0 * c_h_fs * torch.exp(self.alpha_tp * self.F / (self.R * self.T) * u_fs)
+            # ko2 computation: ko2 = ko2_0 * exp(a_par * 2F/(RT) * (E - φ_O2_eq))
+            ko2 = self.ko2_0 * torch.exp(self.a_par * 2 * self.F / (self.R * self.T) * (E - self.phi_O2_eq))
 
-        # ko2 computation: ko2 = ko2_0 * exp(a_par * 2F/(RT) * (E_ext - φ_O2_eq))
-        ko2 = self.ko2_0 * np.exp(self.a_par * 2 * self.F / (self.R * self.T) * (self.E_ext - self.phi_O2_eq))
+            return k1, k2, k3, k4, k5, ktp, ko2
+        else:
+            # Predict the potential on the m/f (x=0) boundary
+            x_mf = torch.zeros(self.cfg.batch_size.rate, 1, device=self.device)
+            inputs_mf = torch.cat([x_mf, t, E], dim=1)
+            u_mf = self.potential_net(inputs_mf)
 
-        return k1, k2, k3, k4, k5, ktp, ko2
+            # k1 computation: k1 = k1_0 * exp(alpha_cv * 3F/(RT) * φ_mf)
+            k1 = self.k1_0 * torch.exp(self.alpha_cv * 3 * self.F / (self.R * self.T) * u_mf)
+
+            # k2 computation: k2 = k2_0 * exp(alpha_av * 2F/(RT) * φ_mf)
+            k2 = self.k2_0 * torch.exp(self.alpha_av * 2 * self.F / (self.R * self.T) * u_mf)
+
+            #Predict L to use in calculation rate constants
+            L_inputs = torch.cat([t,E],dim=1)
+            L_pred = self.L_net(L_inputs)
+
+            # Predict the potential on the f/s (x=L) boundary
+            x_fs = torch.ones(self.cfg.batch_size.rate, 1, device=self.device) * L_pred
+            inputs_fs = torch.cat([x_fs, t, E], dim=1)
+            u_fs = self.potential_net(inputs_fs)
+
+            # k3 computation: k3 = k3_0 * exp(beta_cv * (3-δ)F/(RT) * φ_fs)
+            k3 = self.k3_0 * torch.exp(self.beta_cv * (3 - self.delta3) * self.F / (self.R * self.T) * u_fs)
+
+            # k4 computation: chemical reaction, potential independent
+            k4 = self.k4_0
+
+            # k5 computation: k5 = k5_0 * (c_H+)^n, assuming n=1
+            k5 = self.k5_0 * self.c_H
+
+            # Compute the concentration of holes at the f/s interface
+            c_h_fs = self.h_net(inputs_fs)
+
+            # ktp computation: ktp = ktp_0 * c_h * exp(alpha_tp * F/(RT) * φ_fs)
+            ktp = self.ktp_0 * c_h_fs * torch.exp(self.alpha_tp * self.F / (self.R * self.T) * u_fs)
+
+            # ko2 computation: ko2 = ko2_0 * exp(a_par * 2F/(RT) * (E_ext - φ_O2_eq))
+            ko2 = self.ko2_0 * torch.exp(self.a_par * 2 * self.F / (self.R * self.T) * (E - self.phi_O2_eq))
+
+            return k1, k2, k3, k4, k5, ktp, ko2
 
     def initial_condition_loss(self):
         """Compute initial condition losses with individual tracking"""
-        t = torch.zeros(self.cfg.batch_size.IC, 1, device=self.device)
-        L_initial_pred = self.L_net(t)
+        t_base = torch.zeros(self.cfg.batch_size.IC, 1, device=self.device)
+        t_epsilon = torch.rand_like(t_base) * 0.001 * self.time_scale
+        t = t_base + t_epsilon
+        E = torch.rand(self.cfg.batch_size.E,1,device=self.device)*(self.cfg.pde.physics.E_max - self.cfg.pde.physics.E_min) + self.cfg.pde.physics.E_min
+        L_inputs = torch.cat([t,E],dim=1)
+        L_initial_pred = self.L_net(L_inputs)
         x = torch.rand(self.cfg.batch_size.IC, 1, device=self.device) * L_initial_pred #self.L_initial #Would it be better to change this to L_pred at t=0? vs hard enforcing this?, also we could change the way we are sampling? 
         t.requires_grad_(True)
-        inputs = torch.cat([x, t], dim=1)
+        inputs = torch.cat([x, t,E], dim=1)
 
         # Initial Conditions for film thickness
         L_initial_loss = torch.mean((L_initial_pred - self.L_initial)**2)
@@ -364,12 +411,12 @@ class Pinnacle():
         log_av_initial_t = torch.autograd.grad(log_av_initial_pred, t, grad_outputs=torch.ones_like(log_av_initial_pred), retain_graph=True, create_graph=True)[0]
         av_initial_pred = torch.exp(log_av_initial_pred)
         av_above_threshold = torch.clamp(av_initial_pred-threshold,min=0)
-        av_initial_loss = 0.1*torch.mean((av_above_threshold)** 2) + torch.mean(log_av_initial_t ** 2) #Equivalent initial conditions in terms of log(c)
+        av_initial_loss = torch.mean((av_above_threshold)** 2) + torch.mean(log_av_initial_t ** 2) #Equivalent initial conditions in terms of log(c)
 
         # Potential Initial Conditions
         u_initial_pred = self.potential_net(inputs)
         u_initial_t = torch.autograd.grad(u_initial_pred, t, grad_outputs=torch.ones_like(u_initial_pred), retain_graph=True, create_graph=True)[0]
-        poisson_initial_loss = torch.mean((u_initial_pred - (self.E_ext - 1e7 * x)) ** 2) + torch.mean(u_initial_t ** 2) #This is very stiff! 
+        poisson_initial_loss = 0.01*torch.mean((u_initial_pred - (E - 1e7 * x)) ** 2) + torch.mean(u_initial_t ** 2) #This is very stiff! 
 
         # Hole Initial Conditions
         log_h_initial_pred = self.h_net(inputs)
@@ -384,12 +431,13 @@ class Pinnacle():
         """Compute boundary losses with individual tracking"""
 
         t = torch.ones(self.cfg.batch_size.BC,1,device=self.device,requires_grad=True)*self.time_scale
-        k1, k2, k3, k4, k5, ktp, ko2 = self.compute_rate_constants(t)
+        E = torch.rand(self.cfg.batch_size.E,1,device=self.device)*(self.cfg.pde.physics.E_max - self.cfg.pde.physics.E_min) + self.cfg.pde.physics.E_min
+        k1, k2, k3, k4, k5, ktp, ko2 = self.compute_rate_constants(t,E)
         # m/f interface conditions
         x_mf = torch.zeros(self.cfg.batch_size.BC, 1, device=self.device)
         x_mf.requires_grad_(True)
 
-        inputs_mf = torch.cat([x_mf, t], dim=1)
+        inputs_mf = torch.cat([x_mf, t,E], dim=1)
         # Predicting the potential at m/f interface
         u_pred_mf = self.potential_net(inputs_mf)
         u_pred_mf_x = torch.autograd.grad(u_pred_mf, x_mf, grad_outputs=torch.ones_like(u_pred_mf), retain_graph=True, create_graph=True)[0]
@@ -400,10 +448,11 @@ class Pinnacle():
         cv_pred_mf = torch.exp(log_cv_pred_mf)
         cv_pred_mf_x = cv_pred_mf*log_cv_pred_mf_x
         #Predict L to use in caclulating BC's
-        L_pred = self.L_net(t)
+        L_inputs = torch.cat([t,E],dim=1)
+        L_pred = self.L_net(L_inputs)
         L_pred_t = torch.autograd.grad(L_pred,t,grad_outputs=torch.ones_like(L_pred),retain_graph=True,create_graph=True)[0]
         
-        q1 = self.k1_0* torch.exp(self.alpha_cv*(self.E_ext-u_pred_mf)) + self.U_cv*u_pred_mf_x  - L_pred_t #(self.Omega*(k2-k5)) #analytic enforcing might be stiff
+        q1 = self.k1_0* torch.exp(self.alpha_cv*(E-u_pred_mf)) + self.U_cv*u_pred_mf_x  - L_pred_t #(self.Omega*(k2-k5)) #analytic enforcing might be stiff
         cv_mf_loss = torch.mean((-self.D_cv*cv_pred_mf_x +q1*cv_pred_mf)**2)
 
         # av at m/f conditions 
@@ -411,19 +460,19 @@ class Pinnacle():
         log_av_pred_mf_x = torch.autograd.grad(log_av_pred_mf, x_mf, grad_outputs=torch.ones_like(log_av_pred_mf), retain_graph=True, create_graph=True)[0] 
         av_pred_mf = torch.exp(log_av_pred_mf)
         av_pred_mf_x = av_pred_mf*log_av_pred_mf_x
-        g2 = (4/3)*self.k2_0*torch.exp(self.alpha_av*(self.E_ext-u_pred_mf))
+        g2 = (4/3)*self.k2_0*torch.exp(self.alpha_av*(E-u_pred_mf))
         q2 = -1*self.U_av*u_pred_mf_x - L_pred_t #(self.Omega*(k2-k5)) #analytic enforcing might be stiff
 
         av_mf_loss = torch.mean((self.D_av*av_pred_mf_x -g2 +q2*av_pred_mf)**2)
 
         # potential at m/f conditions
-        g3 = self.eps_Ddl* ((u_pred_mf-self.E_ext)/self.d_Ddl)
+        g3 = self.eps_Ddl* ((u_pred_mf-E)/self.d_Ddl)
 
         u_mf_loss = torch.mean((-self.epsilonf*u_pred_mf_x -g3)**2)
 
         # f/s interface conditions
         x_fs = torch.ones(self.cfg.batch_size.BC, 1, device=self.device)*L_pred
-        inputs_fs = torch.cat([x_fs, t], dim=1)
+        inputs_fs = torch.cat([x_fs, t,E], dim=1)
         
         # Predicting the potential at f/s
         u_pred_fs = self.potential_net(inputs_fs)
@@ -475,13 +524,14 @@ class Pinnacle():
     
         # Sample interior points
         t = torch.rand(self.cfg.batch_size.interior, 1, device=self.device) * self.time_scale
-
-        L_pred = self.L_net(t)
+        E = torch.rand(self.cfg.batch_size.E,1,device=self.device)*(self.cfg.pde.physics.E_max - self.cfg.pde.physics.E_min) + self.cfg.pde.physics.E_min
+        L_inputs = torch.cat([t,E],dim=1)
+        L_pred = self.L_net(L_inputs)
 
         x = torch.rand(self.cfg.batch_size.interior, 1, device=self.device) * L_pred 
 
         # Compute PDE residuals
-        cd_cv_residual, cd_av_residual, cd_h_residual, poisson_residual = self.pde_residuals(x, t)
+        cd_cv_residual, cd_av_residual, cd_h_residual, poisson_residual = self.pde_residuals(x, t,E)
 
         # Calculate individual PDE losses
         cv_pde_loss = torch.mean(cd_cv_residual**2)
@@ -555,6 +605,16 @@ class Pinnacle():
     
         return loss_dict_float
     
+    def load_model(self, path):
+        """Load model state from checkpoint"""
+        checkpoint = torch.load(f"{path}.pt", map_location=self.device)
+        
+        self.potential_net.load_state_dict(checkpoint['potential_net'])
+        self.CV_net.load_state_dict(checkpoint['CV_net'])
+        self.AV_net.load_state_dict(checkpoint['AV_net'])
+        self.h_net.load_state_dict(checkpoint['h_net'])
+        self.L_net.load_state_dict(checkpoint['L_net'])
+    
     def train(self):
         """Train the model with detailed loss tracking"""
         
@@ -594,6 +654,12 @@ class Pinnacle():
                 tqdm.write(f"  CV: {loss_dict['cv_ic']:.6f} | AV: {loss_dict['av_ic']:.6f} | H: {loss_dict['h_ic']:.6f}")
                 tqdm.write(f"  Poisson: {loss_dict['poisson_ic']:.6f} | L: {loss_dict['L_ic']:.6f}")
                 
+                current_loss = loss_dict['total']
+                if current_loss < self.best_loss:
+                    self.best_loss = current_loss
+                    self.best_checkpoint_path = f"outputs/checkpoints/model_best"
+                    self.save_model(self.best_checkpoint_path)
+                    
                 # Save if specified
                 if step % self.cfg.training.save_network_freq == 0 and step > 0:
                     self.save_model(f"outputs/checkpoints_{self.cfg.experiment.name}/model_step_{step}")
@@ -610,11 +676,16 @@ class Pinnacle():
         tqdm.write(f"  Worst PDE: {max([('CV', final_loss['cv_pde']), ('AV', final_loss['av_pde']), ('Hole', final_loss['h_pde']), ('Poisson', final_loss['poisson_pde'])], key=lambda x: x[1])}")
         
         self.save_model(f"outputs/checkpoints_{self.cfg.experiment.name}/model_final")
-        
+
+        if self.best_checkpoint_path:
+            tqdm.write(f"🔄 Loading best checkpoint for inference...")
+            self.load_model(self.best_checkpoint_path)
+            tqdm.write(f"✅ Using best model (loss: {self.best_loss:.6f})")
+            
         return loss_history
     
     def visualize_predictions(self, step="final"):
-        """Simple function to visualize network predictions across input ranges"""
+        """Visualize network predictions across input ranges - now with E dimension"""
         
         # Create output directory
         plots_dir = f"outputs/plots_{self.cfg.experiment.name}"
@@ -625,31 +696,45 @@ class Pinnacle():
             n_spatial = 50
             n_temporal = 50
             
+            # Fix a representative potential for visualization
+            E_fixed = torch.tensor([[0.8]], device=self.device)  # Use middle of range
+            
             # Time range (0 to time_scale)
             t_range = torch.linspace(0, self.time_scale, n_temporal).to(self.device)
             
             # Get final film thickness to set spatial range
             t_final = torch.tensor([[float(self.time_scale)]], device=self.device)
-            L_final = self.L_net(t_final).item()
+            L_inputs_final = torch.cat([t_final, E_fixed], dim=1)
+            L_final = self.L_net(L_inputs_final).item()
             x_range = torch.linspace(0, L_final, n_spatial).to(self.device)
             
             tqdm.write(f"Plotting predictions over:")
             tqdm.write(f"  Time range: [0, {self.time_scale:.1f}]")
             tqdm.write(f"  Spatial range: [0, {L_final:.2e}]")
+            tqdm.write(f"  Fixed potential: {E_fixed.item():.1f}V")
             
             # Create 2D grid for contour plots
             T_mesh, X_mesh = torch.meshgrid(t_range, x_range, indexing='ij')
-            inputs_2d = torch.stack([X_mesh.flatten(), T_mesh.flatten()], dim=1)
+            E_mesh = torch.full_like(T_mesh, E_fixed.item())  # Fixed E for all points
             
-            # Get 2D predictions
-            u_2d = self.potential_net(inputs_2d).reshape(n_temporal, n_spatial)
-            cv_2d = self.CV_net(inputs_2d).reshape(n_temporal, n_spatial)
-            av_2d = self.AV_net(inputs_2d).reshape(n_temporal, n_spatial)
-            h_2d = self.h_net(inputs_2d).reshape(n_temporal, n_spatial)
+            # Stack inputs for 3D networks
+            inputs_3d = torch.stack([
+                X_mesh.flatten(), 
+                T_mesh.flatten(), 
+                E_mesh.flatten()
+            ], dim=1)
             
-            # Film thickness evolution
+            # Get 3D network predictions
+            u_2d = self.potential_net(inputs_3d).reshape(n_temporal, n_spatial)
+            cv_2d = self.CV_net(inputs_3d).reshape(n_temporal, n_spatial)
+            av_2d = self.AV_net(inputs_3d).reshape(n_temporal, n_spatial)
+            h_2d = self.h_net(inputs_3d).reshape(n_temporal, n_spatial)
+            
+            # Film thickness evolution (depends on t and E)
             t_1d = t_range.unsqueeze(1)
-            L_1d = self.L_net(t_1d).squeeze()
+            E_1d = torch.full_like(t_1d, E_fixed.item())
+            L_inputs_1d = torch.cat([t_1d, E_1d], dim=1)
+            L_1d = self.L_net(L_inputs_1d).squeeze()
             
             # Convert to numpy
             t_np = t_range.cpu().numpy()
@@ -669,39 +754,50 @@ class Pinnacle():
             im1 = axes[0,0].contourf(X_np, T_np, u_np, levels=20, cmap='RdBu_r')
             axes[0,0].set_xlabel('Position')
             axes[0,0].set_ylabel('Time')
-            axes[0,0].set_title('Potential φ(x,t)')
+            axes[0,0].set_title(f'Potential φ(x,t) at E={E_fixed.item():.1f}V')
             plt.colorbar(im1, ax=axes[0,0])
             
             # 2. Cation vacancies
             im2 = axes[0,1].contourf(X_np, T_np, cv_np, levels=20, cmap='Reds')
             axes[0,1].set_xlabel('Position')
             axes[0,1].set_ylabel('Time')
-            axes[0,1].set_title('Log Cation Vacancies c_cv(x,t)')
+            axes[0,1].set_title(f'Log Cation Vacancies at E={E_fixed.item():.1f}V')
             plt.colorbar(im2, ax=axes[0,1])
             
             # 3. Anion vacancies
             im3 = axes[0,2].contourf(X_np, T_np, av_np, levels=20, cmap='Blues')
             axes[0,2].set_xlabel('Position')
             axes[0,2].set_ylabel('Time')
-            axes[0,2].set_title('Log Anion Vacancies c_av(x,t)')
+            axes[0,2].set_title(f'Log Anion Vacancies at E={E_fixed.item():.1f}V')
             plt.colorbar(im3, ax=axes[0,2])
             
             # 4. Holes
             im4 = axes[1,0].contourf(X_np, T_np, h_np, levels=20, cmap='Purples')
             axes[1,0].set_xlabel('Position')
             axes[1,0].set_ylabel('Time')
-            axes[1,0].set_title('Log Holes c_h(x,t)')
+            axes[1,0].set_title(f'Log Holes at E={E_fixed.item():.1f}V')
             plt.colorbar(im4, ax=axes[1,0])
             
             # 5. Film thickness
             axes[1,1].plot(t_np, L_np, 'k-', linewidth=3)
             axes[1,1].set_xlabel('Time')
             axes[1,1].set_ylabel('Film Thickness')
-            axes[1,1].set_title('Film Thickness L(t)')
+            axes[1,1].set_title(f'Film Thickness L(t) at E={E_fixed.item():.1f}V')
             axes[1,1].grid(True, alpha=0.3)
             
-            # Add legends
-            axes[1,2].legend(loc='upper left')
+            # 6. Potential dependence at fixed time/position
+            E_sweep = torch.linspace(0.5, 1.5, 50).to(self.device)
+            t_mid = torch.full((50, 1), self.time_scale/2, device=self.device)
+            x_mid = torch.full((50, 1), L_final/2, device=self.device)
+            
+            E_sweep_inputs = torch.cat([x_mid, t_mid, E_sweep.unsqueeze(1)], dim=1)
+            u_vs_E = self.potential_net(E_sweep_inputs).cpu().numpy()
+            
+            axes[1,2].plot(E_sweep.cpu().numpy(), u_vs_E, 'r-', linewidth=2)
+            axes[1,2].set_xlabel('Applied Potential E [V]')
+            axes[1,2].set_ylabel('Film Potential [V]')
+            axes[1,2].set_title(f'Potential vs E (x={L_final/2:.1e}, t={self.time_scale/2:.1f})')
+            axes[1,2].grid(True, alpha=0.3)
             
             plt.suptitle(f'Network Predictions Overview - Step {step}', fontsize=16)
             plt.tight_layout()
@@ -711,17 +807,15 @@ class Pinnacle():
             plt.savefig(plot_path, dpi=300, bbox_inches='tight')
             plt.close()
             
-            # tqdm.write statistics
-            tqdm.write(f"\nPrediction Statistics (Step {step}):")
-            tqdm.write("-" * 40)
+            # Print statistics
+            tqdm.write(f"\nPrediction Statistics (Step {step}) at E={E_fixed.item():.1f}V:")
+            tqdm.write("-" * 50)
             tqdm.write(f"Potential:        {u_np.min():.2e} to {u_np.max():.2e} (mean: {u_np.mean():.2e})")
             tqdm.write(f"Cation Vacancies: {cv_np.min():.2e} to {cv_np.max():.2e} (mean: {cv_np.mean():.2e})")
             tqdm.write(f"Anion Vacancies:  {av_np.min():.2e} to {av_np.max():.2e} (mean: {av_np.mean():.2e})")
             tqdm.write(f"Holes:            {h_np.min():.2e} to {h_np.max():.2e} (mean: {h_np.mean():.2e})")
             tqdm.write(f"Film Thickness:   {L_np.min():.2e} to {L_np.max():.2e}")
-            
-            # Check for potential issues"""Simple function to visualize network predictions across input ranges"""
-        
+
     def save_model(self, name):
         """Save model state."""
         torch.save({
@@ -735,7 +829,7 @@ class Pinnacle():
 
 
     def export_for_netron(self):
-        """Export combined model for Netron visualization"""
+        """Export combined model for Netron visualization - updated for 3D inputs"""
         
         save_path = f"outputs/pinnacle_architecture.onnx"
         os.makedirs("outputs", exist_ok=True)
@@ -751,16 +845,19 @@ class Pinnacle():
                 self.hole_network = h_net
                 self.film_thickness_network = L_net
                 
-            def forward(self, x, t):
-                # Combine x,t for spatial-temporal networks
-                xt_input = torch.cat([x, t], dim=1)
+            def forward(self, x, t, E):
+                # Combine x,t,E for spatial-temporal-potential networks
+                xte_input = torch.cat([x, t, E], dim=1)
+                
+                # Combine t,E for film thickness network
+                te_input = torch.cat([t, E], dim=1)
                 
                 # Get all predictions
-                potential = self.potential_network(xt_input)
-                cv_conc = self.cation_vacancy_network(xt_input)
-                av_conc = self.anion_vacancy_network(xt_input)
-                h_conc = self.hole_network(xt_input)
-                thickness = self.film_thickness_network(t)
+                potential = self.potential_network(xte_input)
+                cv_conc = self.cation_vacancy_network(xte_input)
+                av_conc = self.anion_vacancy_network(xte_input)
+                h_conc = self.hole_network(xte_input)
+                thickness = self.film_thickness_network(te_input)
                 
                 return potential, cv_conc, av_conc, h_conc, thickness
         
@@ -777,16 +874,89 @@ class Pinnacle():
         # Export to ONNX
         dummy_x = torch.randn(1, 1)  # spatial position
         dummy_t = torch.randn(1, 1)  # time
+        dummy_E = torch.randn(1, 1)  # applied potential
         
         torch.onnx.export(
             combined,
-            (dummy_x, dummy_t),
+            (dummy_x, dummy_t, dummy_E),
             save_path,
-            input_names=['x_position', 't_time'],
+            input_names=['x_position', 't_time', 'E_applied'],
             output_names=['potential', 'cation_vacancy_conc', 'anion_vacancy_conc', 'hole_conc', 'film_thickness']
         )
         
-        tqdm.write(f"✅ Architecture exported!")
+        tqdm.write(f"✅ Architecture exported for 3D inputs (x, t, E)!")
+
+    def generate_polarization_curve(self, t_eval=None, n_points=50):
+        """Generate polarization curve at specified time"""
+        
+        if t_eval is None:
+            t_eval = self.time_scale  # Use final time by default
+        
+        tqdm.write(f"Generating polarization curve at t={t_eval}")
+        E_range = (self.cfg.pde.physics.E_min,self.cfg.pde.physics.E_max)
+        with torch.no_grad():
+            # Create potential sweep
+            E_values = torch.linspace(E_range[0], E_range[1], n_points).to(self.device)
+            currents = []
+            
+            for E_val in E_values:
+                # Calculate current at f/s interface
+                t_tensor = torch.tensor([[t_eval]], device=self.device)
+                E_tensor = torch.tensor([[E_val.item()]], device=self.device)
+                
+                # Get film thickness at this time and potential
+                L_inputs = torch.cat([t_tensor, E_tensor], dim=1)
+                L_val = self.L_net(L_inputs)
+                
+                # Evaluate at f/s interface (x = L)
+                x_fs = L_val
+                inputs_fs = torch.cat([x_fs, t_tensor, E_tensor], dim=1)
+                
+                # Get concentrations and rate constants
+                k1, k2, k3, k4, k5, ktp, ko2 = self.compute_rate_constants(t_tensor, E_tensor,single=True)
+                h_fs = torch.exp(self.h_net(inputs_fs))  # Convert from log
+                av_fs = torch.exp(self.AV_net(inputs_fs))
+                u_fs = self.potential_net(inputs_fs)
+                # Calculate current contributions (mol/(m²·s) -> current density)
+                # Convert to A/m² using Faraday constant
+                current_k3 = 3 * self.F * k3  # 3 electrons per k3 reaction
+                current_k4 = 2 * self.F * k4 *av_fs  # 2 electrons per k4 reaction  
+                current_ktp = 1 * self.F * ktp * h_fs  # 1 electron per hole Might need a different handling
+                #current_ko2 = 2 * self.F * ko2  # 2 electrons per O2 reaction
+                print(f"At E={E_val:.2f}V:")
+                print(f"  u_fs: {u_fs.item():.3f}V")  
+                print(f"  h_fs: {h_fs.item():.2e}")
+                print(f"  av_fs: {av_fs.item():.2e}")
+                print(f"  k3 raw: {k3.item():.2e}")
+                print(f"  k4 raw: {k4.item():.2e}")
+                print(f"  ktp raw: {ktp.item():.2e}")
+                print(f"  exponential arg for k3: {self.beta_cv * (3 - self.delta3) * self.F / (self.R * self.T) * u_fs.item():.2f}")
+                # Total current (can be positive or negative)
+                total_current = current_k3 + current_k4 + current_ktp 
+                currents.append(total_current.item())
+            
+            # Convert to numpy for plotting
+            E_np = E_values.cpu().numpy()
+            I_np = np.array(currents)
+            
+            # Create polarization curve plot
+            plt.figure(figsize=(10, 6))
+            plt.plot(E_np, I_np, 'b-', linewidth=2, label='Total Current')
+            plt.xlabel('Applied Potential [V]')
+            plt.ylabel('Current Density [A/m²]')
+            plt.title(f'Polarization Curve at t={t_eval}')
+            plt.grid(True, alpha=0.3)
+            plt.legend()
+            
+            # Save plot
+            plots_dir = f"outputs/plots_{self.cfg.experiment.name}"
+            os.makedirs(plots_dir, exist_ok=True)
+            plt.savefig(f"{plots_dir}/polarization_curve_t_{t_eval}.png", dpi=300, bbox_inches='tight')
+            plt.close()
+            
+            tqdm.write(f"Current range: {I_np.min():.2e} to {I_np.max():.2e} A/m²")
+            
+            return E_np, I_np
         
 
 @hydra.main(config_path="conf", config_name="config", version_base=None)
@@ -805,9 +975,17 @@ def main(cfg: DictConfig):
     tqdm.write("Exporting trained model to ONNX...")
     model.export_for_netron()
     tqdm.write("="*50)
+
+    model.potential_net.to(model.device)
+    model.CV_net.to(model.device) 
+    model.AV_net.to(model.device)
+    model.h_net.to(model.device)
+    model.L_net.to(model.device)
+
     
     # Create comprehensive loss plots
     plot_detailed_losses(loss_history,cfg.experiment.name)
+    E_values, current_values = model.generate_polarization_curve(t_eval=1.0)
 
 def plot_detailed_losses(loss_history,experiment_name):
     """Create comprehensive plots of all loss components"""
