@@ -26,7 +26,7 @@ optimizer:
     lr: 1.0e-3
     betas: [0.9, 0.999]
     eps: 1.0e-8
-    weight_decay: 0.0
+    weight_decay: 1e-2
     amsgrad: False
 
 # Learning rate scheduler
@@ -42,7 +42,7 @@ scheduler:
 
 # Training settings
 training:
-  max_steps: 10000
+  max_steps: 12000
   rec_results_freq: 100
   rec_inference_freq: 1000
   save_network_freq: 1000
@@ -50,14 +50,13 @@ training:
 
 # Batch sizes for different constraints
 batch_size:
-  BC: 1024 # Boundary points per boundary
-  interior: 1024 # Interior points
-  temporal : 10 # number of time steps for causal training
+  BC: 8192 # Boundary points per boundary
+  interior: 8192 # Interior points
   inference: 1024 # Points for inference/visualization
-  IC: 1024
-  rate: 1024 # For rate constant computation
-  film_thickness: 1024 #For Predicting the film_thickness
-  E: 1024 #Number of external potentials to sample within range 
+  IC: 8192
+  rate: 8192 # For rate constant computation
+  film_thickness: 8192 #For Predicting the film_thickness
+  E: 8192 #Number of external potentials to sample within range 
 
 # Custom PDE parameters
 pde:
@@ -74,7 +73,7 @@ pde:
     k_B: 1.3806e-23 # Boltzmann constant [J/K]
     eps0: 8.85e-12 # Vacuum permittivity [F/m]
     E_min: -1.0  # External applied potential [V] - placeholder for now
-    E_max: 1.0
+    E_max: 1.6
     # Diffusion coefficients [m²/s]
     D_cv: 1.0e-21
     D_av: 1.0e-21
@@ -155,7 +154,7 @@ domain:
     L_initial: 1e-9 # Initial film thickness [m]
 
 experiment:
-  name: "poisson_initial_constant"
+  name: "Polarization_Test"
 
 # Hydra-specific settings
 hydra:

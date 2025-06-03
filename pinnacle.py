@@ -151,7 +151,7 @@ class Pinnacle():
 
         # Optimizer
         params = list(self.potential_net.parameters()) + list(self.CV_net.parameters()) + list(self.AV_net.parameters()) + list(self.h_net.parameters()) + list(self.L_net.parameters())
-        self.optimizer = optim.Adam(
+        self.optimizer = optim.AdamW(
             params,
             lr=cfg.optimizer.adam.lr,
             betas=cfg.optimizer.adam.betas,
@@ -309,10 +309,10 @@ class Pinnacle():
             u_mf = self.potential_net(inputs_mf)
 
             # k1 computation: k1 = k1_0 * exp(alpha_cv * 3F/(RT) * φ_mf)
-            k1 = self.k1_0 * torch.exp(self.alpha_cv * 3 * self.F / (self.R * self.T) * u_mf)
+            k1 = self.k1_0 * torch.exp(self.alpha_cv * 3 * (self.F / (self.R * self.T)) * u_mf)
 
             # k2 computation: k2 = k2_0 * exp(alpha_av * 2F/(RT) * φ_mf)
-            k2 = self.k2_0 * torch.exp(self.alpha_av * 2 * self.F / (self.R * self.T) * u_mf)
+            k2 = self.k2_0 * torch.exp(self.a_cv * u_mf)
 
             #Predict L to use in calculation rate constants
             L_inputs = torch.cat([t, E], dim=1)
@@ -324,7 +324,7 @@ class Pinnacle():
             u_fs = self.potential_net(inputs_fs)
 
             # k3 computation: k3 = k3_0 * exp(beta_cv * (3-δ)F/(RT) * φ_fs)
-            k3 = self.k3_0 * torch.exp(self.beta_cv * (3 - self.delta3) * self.F / (self.R * self.T) * u_fs)
+            k3 = self.k3_0 * torch.exp(self.b_cv* u_fs)
 
             # k4 computation: chemical reaction, potential independent
             k4 = self.k4_0
@@ -352,7 +352,7 @@ class Pinnacle():
             k1 = self.k1_0 * torch.exp(self.alpha_cv * 3 * self.F / (self.R * self.T) * u_mf)
 
             # k2 computation: k2 = k2_0 * exp(alpha_av * 2F/(RT) * φ_mf)
-            k2 = self.k2_0 * torch.exp(self.alpha_av * 2 * self.F / (self.R * self.T) * u_mf)
+            k2 = self.k2_0 * torch.exp(self.a_cv * u_mf)
 
             #Predict L to use in calculation rate constants
             L_inputs = torch.cat([t,E],dim=1)
@@ -364,7 +364,7 @@ class Pinnacle():
             u_fs = self.potential_net(inputs_fs)
 
             # k3 computation: k3 = k3_0 * exp(beta_cv * (3-δ)F/(RT) * φ_fs)
-            k3 = self.k3_0 * torch.exp(self.beta_cv * (3 - self.delta3) * self.F / (self.R * self.T) * u_fs)
+            k3 = self.k3_0 * torch.exp(self.b_cv* u_fs)
 
             # k4 computation: chemical reaction, potential independent
             k4 = self.k4_0
@@ -416,8 +416,7 @@ class Pinnacle():
         # Potential Initial Conditions
         u_initial_pred = self.potential_net(inputs)
         u_initial_t = torch.autograd.grad(u_initial_pred, t, grad_outputs=torch.ones_like(u_initial_pred), retain_graph=True, create_graph=True)[0]
-        poisson_initial_loss = torch.mean((u_initial_pred - E) ** 2) + torch.mean(u_initial_t ** 2) #This is very stiff! so I removed the linear initialization and just made it constant. 
-
+        poisson_initial_loss = torch.mean((u_initial_pred - (E-(1e2*x)))**2) + torch.mean(u_initial_t ** 2) #This is very stiff! 
         # Hole Initial Conditions
         log_h_initial_pred = self.h_net(inputs)
         log_h_initial_t = torch.autograd.grad(log_h_initial_pred, t, grad_outputs=torch.ones_like(log_h_initial_pred), retain_graph=True, create_graph=True)[0]
@@ -519,6 +518,7 @@ class Pinnacle():
         total_BC_loss = cv_mf_loss + av_mf_loss + u_mf_loss + cv_fs_loss + av_fs_loss + u_fs_loss + h_fs_loss
 
         return total_BC_loss, cv_mf_loss, av_mf_loss, u_mf_loss, cv_fs_loss, av_fs_loss, u_fs_loss, h_fs_loss
+    
     def interior_loss(self):
         """Compute PDE residuals on interior points with individual tracking"""
     
@@ -627,6 +627,7 @@ class Pinnacle():
             'cv_fs_bc': [], 'av_fs_bc': [], 'u_fs_bc': [], 'h_fs_bc': []
         }
         
+
         # Training loop
         for step in tqdm(range(self.cfg.training.max_steps)):
             loss_dict = self.train_step()
@@ -910,32 +911,30 @@ class Pinnacle():
                 
                 # Evaluate at f/s interface (x = L)
                 x_fs = L_val
+                x_mf = torch.zeros_like(L_val)
                 inputs_fs = torch.cat([x_fs, t_tensor, E_tensor], dim=1)
-                
+                inputs_mf = torch.cat([x_mf,t_tensor,E_tensor],dim=1)
+
                 # Get concentrations and rate constants
                 k1, k2, k3, k4, k5, ktp, ko2 = self.compute_rate_constants(t_tensor, E_tensor,single=True)
                 h_fs = torch.pow(10,self.h_net(inputs_fs))  # Convert from log
                 av_fs = torch.pow(10,self.AV_net(inputs_fs))
                 u_fs = self.potential_net(inputs_fs)
+                cv_mf = torch.pow(10,self.CV_net(inputs_mf))
                 # Calculate current contributions (mol/(m²·s) -> current density)
                 # Convert to A/m² using Faraday constant
-                current_k1 = 
-                current_k2 = 
-                current_k3 = 3 * self.F * k3  # 3 electrons per k3 reaction
-                current_k4 = 2 * self.F * k4 * av_fs  # 2 electrons per k4 reaction  
-                current_k5 = 
-                current_ktp = 1 * self.F * ktp * h_fs  # 1 electron per hole Might need a different handling
+                current_k1 = (8.0/3.0) * k1 * self.F * cv_mf
+                current_k2 = (8.0/3.0) * self.F *k2
+                current_k3 = (1/3) * self.F * k3  # 3 electrons per k3 reaction  
+                current_ktp = (-1.0) * self.F * ktp * h_fs  # 1 electron per hole Might need a different handling
                 #current_ko2 = 2 * self.F * ko2  # 2 electrons per O2 reaction
-                print(f"At E={E_val:.2f}V:")
-                print(f"  u_fs: {u_fs.item():.3f}V")  
-                print(f"  h_fs: {h_fs.item():.2e}")
-                print(f"  av_fs: {av_fs.item():.2e}")
-                print(f"  k3 raw: {k3.item():.2e}")
-                print(f"  k4 raw: {k4:.2e}")
-                print(f"  ktp raw: {ktp.item():.2e}")
-                print(f"  exponential arg for k3: {self.beta_cv * (3 - self.delta3) * self.F / (self.R * self.T) * u_fs.item():.2f}")
                 # Total current (can be positive or negative)
-                total_current = current_k3 + current_k4 + current_ktp 
+                print(f"i_1:{current_k1.item():.6f}")
+                print(f"i_2:{current_k2.item():.6f}")
+                print(f"i_3:{current_k3.item():.6f}")
+                print(f"i_tp:{current_ktp.item():.6f}")
+
+                total_current = current_k1 + current_k2+ current_k3 + current_ktp
                 currents.append(total_current.item())
             
             # Convert to numpy for plotting
@@ -1000,16 +999,17 @@ def plot_detailed_losses(loss_history,experiment_name):
     
     # Create output directory
     os.makedirs(f"outputs/plots_{experiment_name}", exist_ok=True)
-    E_maxoss components
     fig, axes = plt.subplots(2, 2, figsize=(15, 12))
-    
     # Total and main components
     axes[0,0].semilogy(loss_history['total'], label='Total Loss', linewidth=2)
     axes[0,0].semilogy(loss_history['interior'], label='Interior (PDE)', alpha=0.8)
     axes[0,0].semilogy(loss_history['boundary'], label='Boundary', alpha=0.8)
     axes[0,0].semilogy(loss_history['initial'], label='Initial', alpha=0.8)
     axes[0,0].semilogy(loss_history['L_physics'], label='Film Thickness', alpha=0.8)
-    axes[0,0].set_tE_maxd()
+    axes[0,0].set_title('Main Loss Components')
+    axes[0,0].set_xlabel('Training Step')
+    axes[0,0].set_ylabel('Loss (log scale)')
+    axes[0,0].legend()
     axes[0,0].grid(True, alpha=0.3)
     
     # PDE residuals breakdown
@@ -1017,7 +1017,7 @@ def plot_detailed_losses(loss_history,experiment_name):
     axes[0,1].semilogy(loss_history['av_pde'], label='AV PDE', alpha=0.8)
     axes[0,1].semilogy(loss_history['h_pde'], label='Hole PDE', alpha=0.8)
     axes[0,1].semilogy(loss_history['poisson_pde'], label='Poisson PDE', alpha=0.8)
-    axes[0,1].seE_maxt_title('Individual PDE Residuals')
+    axes[0,1].set_title('Individual PDE Residuals')
     axes[0,1].set_xlabel('Training Step')
     axes[0,1].set_ylabel('Loss (log scale)')
     axes[0,1].legend()
