@@ -38,7 +38,7 @@ scheduler:
     factor: 0.5
     patience: 1000
     threshold: 1e-4
-    min_lr: 1e-6
+    min_lr: 1e-8
 
 # Training settings
 training:
@@ -48,7 +48,7 @@ training:
   save_network_freq: 1000
   causal: 0.001
   #stage: "physics_first"
-  physics_steps: 2000
+  physics_steps: 6000
 
 # Batch sizes for different constraints
 batch_size:
@@ -59,8 +59,8 @@ batch_size:
   L: 2048 #For Predicting the film_thickness
 
 weights:
-  L_initial: 1e4
-  L_physics: 1e10
+  L_initial: 1e7
+  L_physics: 1e15
 
 
 # Custom PDE parameters
@@ -149,9 +149,9 @@ pde:
 
 domain:
   time:
-    time_scale: 1
+    time_scale: 3600
   initial:
-    L_initial: 1e-10 # Initial film thickness [m]
+    L_initial: 1e-9 # Initial film thickness [m]
 
 experiment:
   name: "Staged_Training"
