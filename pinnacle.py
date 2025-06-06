@@ -653,6 +653,13 @@ class Pinnacle():
         self.optimizer.zero_grad()
         loss_dict = self.total_loss()
         loss_dict['total'].backward() 
+
+        max_grad_norm = 1.0  # Start with this, adjust if needed
+        torch.nn.utils.clip_grad_norm_(
+            [p for p in self.optimizer.param_groups[0]['params']], 
+            max_norm=max_grad_norm
+        )
+
         self.optimizer.step()
         self.scheduler.step(loss_dict['total'])
 
@@ -956,11 +963,10 @@ class Pinnacle():
         
         tqdm.write(f"✅ Architecture exported for 3D inputs (x, t, E)!")
 
-    def generate_polarization_curve(self, t_eval=None, n_points=50):
+    def generate_polarization_curve(self, n_points=50):
         """Generate polarization curve at specified time"""
         
-        if t_eval is None:
-            t_eval = self.time_scale  # Use final time by default
+        t_eval = self.time_scale  # Use final time by default
         
         tqdm.write(f"Generating polarization curve at t={t_eval}")
         E_range = (self.cfg.pde.physics.E_min,self.cfg.pde.physics.E_max)
@@ -975,8 +981,7 @@ class Pinnacle():
                 E_tensor = torch.tensor([[E_val.item()]], device=self.device)
                 
                 # Get film thickness at this time and potential
-                L_inputs = torch.cat([t_tensor, E_tensor], dim=1)
-                L_val = self.L_net(L_inputs)
+                L_val = self.get_L_value(t_tensor,E_tensor)
                 
                 # Evaluate at f/s interface (x = L)
                 x_fs = L_val
