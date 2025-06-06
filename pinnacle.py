@@ -147,6 +147,9 @@ class Pinnacle():
 
         #training
         self.best_loss = float('inf')
+        self.training_stage = "physics_first"
+
+        self.initialize_L_net()
 
         # Optimizer
         params = list(self.potential_net.parameters()) + list(self.CV_net.parameters()) + list(self.AV_net.parameters()) + list(self.h_net.parameters()) + list(self.L_net.parameters())
@@ -167,6 +170,15 @@ class Pinnacle():
             threshold=cfg.scheduler.RLROP.threshold,
             min_lr=cfg.scheduler.RLROP.min_lr,
         )
+
+    def initialize_L_net(self):
+        """Initialize L_net output bias to log(L_initial)"""
+        target_log_L = torch.log10(torch.tensor(self.L_initial))  # -10
+        
+        with torch.no_grad():
+            # Set output bias to target, keep weights small
+            self.L_net.output_layer.bias.fill_(target_log_L)
+            self.L_net.output_layer.weight.data *= 0.5  # Make output weights smaller
 
     def compute_gradients(self, x, t, E):
         """Compute the gradients of potential and concentration."""
@@ -278,36 +290,54 @@ class Pinnacle():
     
     def L_loss(self):
         """Enforce dL/dt = Ω(k2 - k5)"""
-        t = torch.rand(self.cfg.batch_size.L,1,device=self.device,requires_grad=True) * self.time_scale
-        single_E = torch.rand(1,1,device=self.device)*(self.cfg.pde.physics.E_max - self.cfg.pde.physics.E_min) + self.cfg.pde.physics.E_min #Pick one random E in the range
-        E = single_E.expand(self.cfg.batch_size.L,1) #Broadcast E value to same size as L values
-        inputs = torch.cat([t,E],dim=1)
-        L_log = self.L_net(inputs)
-        
-        dL_log_dt = torch.autograd.grad(L_log,t,grad_outputs=torch.ones_like(L_log),create_graph=True,retain_graph=True)[0]
+        if self.training_stage == "physics_first":
+            # Stage 1: L is fixed, so dL/dt should be 0
+            # Just return a small dummy loss for logging
+            return torch.tensor(0.0, device=self.device)
+        else:
+            t = torch.rand(self.cfg.batch_size.L,1,device=self.device,requires_grad=True) * self.time_scale
+            single_E = torch.rand(1,1,device=self.device)*(self.cfg.pde.physics.E_max - self.cfg.pde.physics.E_min) + self.cfg.pde.physics.E_min #Pick one random E in the range
+            E = single_E.expand(self.cfg.batch_size.L,1) #Broadcast E value to same size as L values
+            inputs = torch.cat([t,E],dim=1)
+            L_log = self.L_net(inputs)
+            
+            dL_log_dt = torch.autograd.grad(L_log,t,grad_outputs=torch.ones_like(L_log),create_graph=True,retain_graph=True)[0]
 
-        L_pred = torch.pow(10,L_log)
+            L_pred = torch.pow(10,L_log)
 
-        dL_dt = L_pred * dL_log_dt 
+            dL_dt = L_pred * dL_log_dt 
 
-        # Get rate constants (using predicted L for f/s boundary)
+            # Get rate constants (using predicted L for f/s boundary)
 
-        k1, k2, k3, k4, k5, ktp, ko2 = self.compute_rate_constants(t,E)
+            k1, k2, k3, k4, k5, ktp, ko2 = self.compute_rate_constants(t,E)
 
-        dL_dt_physics = self.Omega * (k2 - k5)
-        self._L_diagnostics = {
-        'k2_mean': k2.mean().detach().item(),
-        'k5_mean': k5, 
-        'k2_k5_diff': (k2-k5).mean().detach().item(),
-        'omega_k2_k5': (self.Omega*(k2-k5)).mean().detach().item(),
-        'dL_dt_pred': dL_dt.mean().detach().item(),
-        'dL_dt_physics': dL_dt_physics.mean().detach().item(),
-        'L_current': L_pred.mean().detach().item(),
-        'log_L_current': L_log.mean().detach().item()
-        }
+            dL_dt_physics = self.Omega * (k2 - k5)
+            self._L_diagnostics = {
+            'k2_mean': k2.mean().detach().item(),
+            'k5_mean': k5, 
+            'k2_k5_diff': (k2-k5).mean().detach().item(),
+            'omega_k2_k5': (self.Omega*(k2-k5)).mean().detach().item(),
+            'dL_dt_pred': dL_dt.mean().detach().item(),
+            'dL_dt_physics': dL_dt_physics.mean().detach().item(),
+            'L_current': L_pred.mean().detach().item(),
+            'log_L_current': L_log.mean().detach().item()
+            }
 
-        return torch.mean((dL_dt - dL_dt_physics)**2)
+            return torch.mean((dL_dt - dL_dt_physics)**2)
     
+    def get_L_value(self,t,E):
+        """Get L value - either fixed or from network based on training stage"""
+
+        if self.training_stage == "physics_first":
+            # Fix L at initial value
+            batch_size = t.shape[0]
+            return torch.full((batch_size, 1), self.L_initial, device=self.device)
+        else:
+        # Use network prediction
+            L_inputs = torch.cat([t, E], dim=1)
+            L_log = self.L_net(L_inputs)
+            return torch.pow(10, L_log)
+
     def compute_rate_constants(self,t,E,single=False):
         """Compute the value of the rate constants for each reaction"""
         if single == True:
@@ -323,9 +353,7 @@ class Pinnacle():
             k2 = self.k2_0 * torch.exp(self.a_cv * u_mf)
 
             #Predict L to use in calculation rate constants
-            L_inputs = torch.cat([t, E], dim=1)
-            L_pred_log = self.L_net(L_inputs)
-            L_pred = torch.pow(10,L_pred_log)
+            L_pred = self.get_L_value(t,E)
 
             # Predict the potential on the f/s (x=L) boundary
             x_fs = L_pred  # This is already [1, 1]
@@ -364,9 +392,7 @@ class Pinnacle():
             k2 = self.k2_0 * torch.exp(self.a_cv * u_mf)
 
             #Predict L to use in calculation rate constants
-            L_inputs = torch.cat([t,E],dim=1)
-            L_pred_log = self.L_net(L_inputs)
-            L_pred = torch.pow(10,L_pred_log)
+            L_pred = self.get_L_value(t,E)
 
             # Predict the potential on the f/s (x=L) boundary
             x_fs = torch.ones(t.shape[0], 1, device=self.device) * L_pred
@@ -401,9 +427,7 @@ class Pinnacle():
             single_E = torch.rand(1,1,device=self.device)*(self.cfg.pde.physics.E_max - self.cfg.pde.physics.E_min) + self.cfg.pde.physics.E_min
             E = single_E.expand(self.cfg.batch_size.IC,1)
 
-            L_inputs = torch.cat([t,E],dim=1)
-            L_initial_pred_log = self.L_net(L_inputs)
-            L_initial_pred = torch.pow(10,L_initial_pred_log)
+            L_initial_pred = self.get_L_value(t,E)
             x = torch.rand(self.cfg.batch_size.IC, 1, device=self.device) * L_initial_pred #self.L_initial #Would it be better to change this to L_pred at t=0? vs hard enforcing this?, also we could change the way we are sampling? 
             t.requires_grad_(True)
             inputs = torch.cat([x, t,E], dim=1)
@@ -461,9 +485,7 @@ class Pinnacle():
         cv_pred_mf = torch.pow(10,log_cv_pred_mf)
         cv_pred_mf_x = cv_pred_mf*log_cv_pred_mf_x
         #Predict L to use in caclulating BC's
-        L_inputs = torch.cat([t,E],dim=1)
-        L_pred = self.L_net(L_inputs)
-        L_pred_t = torch.autograd.grad(L_pred,t,grad_outputs=torch.ones_like(L_pred),retain_graph=True,create_graph=True)[0]
+        L_pred = self.get_L_value(t,E)
         
         q1 = self.k1_0* torch.exp(self.alpha_cv*(E-u_pred_mf)) + self.U_cv*u_pred_mf_x  - (self.Omega*(k2-k5)) #analytic enforcing might be stiff
         cv_mf_loss = torch.mean((-self.D_cv*cv_pred_mf_x +q1*cv_pred_mf)**2)
@@ -484,7 +506,7 @@ class Pinnacle():
         u_mf_loss = torch.mean((-self.epsilonf*u_pred_mf_x -g3)**2)
 
         # f/s interface conditions
-        x_fs = torch.ones(self.cfg.batch_size.BC, 1, device=self.device)*L_pred
+        x_fs = torch.ones(self.cfg.batch_size.BC, 1, device=self.device,requires_grad=True)*L_pred
         inputs_fs = torch.cat([x_fs, t,E], dim=1)
         
         # Predicting the potential at f/s
@@ -516,7 +538,7 @@ class Pinnacle():
         log_h_pred_fs = self.h_net(inputs_fs)
         log_h_pred_fs_x = torch.autograd.grad(log_h_pred_fs, x_fs, grad_outputs=torch.ones_like(log_h_pred_fs), retain_graph=True, create_graph=True)[0] 
         h_pred_fs = torch.pow(10,log_h_pred_fs)
-        h_pred_fs_x = h_pred_fs*log_h_pred_fs
+        h_pred_fs_x = h_pred_fs*log_h_pred_fs_x
 
         hole_threshold = 1e-9
         mask = h_pred_fs > hole_threshold
@@ -540,9 +562,7 @@ class Pinnacle():
         t = torch.rand(self.cfg.batch_size.interior, 1, device=self.device) * self.time_scale
         single_E = torch.rand(1,1,device=self.device)*(self.cfg.pde.physics.E_max - self.cfg.pde.physics.E_min) + self.cfg.pde.physics.E_min
         E = single_E.expand(self.cfg.batch_size.interior,1)
-        L_inputs = torch.cat([t,E],dim=1)
-        L_pred_log = self.L_net(L_inputs)
-        L_pred = torch.pow(10,L_pred_log)
+        L_pred = self.get_L_value(t,E)
 
         x = torch.rand(self.cfg.batch_size.interior, 1, device=self.device) * L_pred 
 
@@ -565,20 +585,39 @@ class Pinnacle():
     
     def total_loss(self):
         """Compute total weighted loss with detailed breakdown"""
-        
-        # Get detailed losses
-        interior_loss, cv_pde_loss, av_pde_loss, h_pde_loss, poisson_pde_loss = self.interior_loss()
-        ic_loss, cv_ic_loss, av_ic_loss, poisson_ic_loss, h_ic_loss, L_ic_loss = self.initial_condition_loss()
-        bc_loss, cv_mf_loss, av_mf_loss, u_mf_loss, cv_fs_loss, av_fs_loss, u_fs_loss, h_fs_loss = self.boundary_loss()
-        L_physics_loss = self.L_loss()
-        
+        if self.training_stage == "physics_first":
+            # Get detailed losses
+            interior_loss, cv_pde_loss, av_pde_loss, h_pde_loss, poisson_pde_loss = self.interior_loss()
+            ic_loss, cv_ic_loss, av_ic_loss, poisson_ic_loss, h_ic_loss, L_ic_loss = self.initial_condition_loss()
+            bc_loss, cv_mf_loss, av_mf_loss, u_mf_loss, cv_fs_loss, av_fs_loss, u_fs_loss, h_fs_loss = self.boundary_loss()
+            L_physics_loss = self.L_loss()
+            
 
-        # Apply weights
-        total_loss = ((1/self.cfg.batch_size.interior)*interior_loss + 
-                    (1/self.cfg.batch_size.BC)*bc_loss + 
-                    (1/self.cfg.batch_size.IC)*ic_loss + 
-                    self.cfg.weights.L_physics*(1/self.cfg.batch_size.L)*L_physics_loss)
+            ic_total_no_L = ic_loss - L_ic_loss
+            # Apply weights
+            total_loss = ((1/self.cfg.batch_size.interior)*interior_loss + 
+                        (1/self.cfg.batch_size.BC)*bc_loss + 
+                        (1/self.cfg.batch_size.IC)*ic_total_no_L
+            )
         
+            # Set L losses to zero for logging
+            L_physics_loss = torch.tensor(0.0, device=self.device)
+            L_ic_loss = torch.tensor(0.0, device=self.device)
+
+        else:
+            interior_loss, cv_pde_loss, av_pde_loss, h_pde_loss, poisson_pde_loss = self.interior_loss()
+            ic_loss, cv_ic_loss, av_ic_loss, poisson_ic_loss, h_ic_loss, L_ic_loss = self.initial_condition_loss()
+            bc_loss, cv_mf_loss, av_mf_loss, u_mf_loss, cv_fs_loss, av_fs_loss, u_fs_loss, h_fs_loss = self.boundary_loss()
+            L_physics_loss = self.L_loss()
+            
+
+            total_loss = ((1/self.cfg.batch_size.interior)*interior_loss + 
+                        (1/self.cfg.batch_size.BC)*bc_loss + 
+                        (1/self.cfg.batch_size.IC)*ic_loss+
+                        self.cfg.weights.L_physics*(1/self.cfg.batch_size.L)*L_physics_loss
+            )
+
+
         # Create detailed loss dictionary
         loss_dict = {
             'total': total_loss,
@@ -647,6 +686,12 @@ class Pinnacle():
 
         # Training loop
         for step in tqdm(range(self.cfg.training.max_steps)):
+
+            if step == self.cfg.training.physics_steps and self.training_stage == "physics_first":
+                tqdm.write(f"\n🔄 SWITCHING TO STAGE 2: Training L_net")
+                self.training_stage = "full_training"
+
+
             loss_dict = self.train_step()
             
             # Store all losses
@@ -730,9 +775,7 @@ class Pinnacle():
             
             # Get final film thickness to set spatial range
             t_final = torch.tensor([[float(self.time_scale)]], device=self.device)
-            L_inputs_final = torch.cat([t_final, E_fixed], dim=1)
-            L_final_log = self.L_net(L_inputs_final).item()
-            L_final = np.pow(10,L_final_log)
+            L_final = self.get_L_value(t_final,E_fixed).item()
             x_range = torch.linspace(0, L_final, n_spatial).to(self.device)
             
             tqdm.write(f"Plotting predictions over:")
