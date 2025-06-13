@@ -70,6 +70,7 @@ class Pinnacle():
         self.T = cfg.pde.physics.T
         self.k_B = cfg.pde.physics.k_B
         self.eps0 = cfg.pde.physics.eps0
+        self.electron_charge = 1.6e19
 
         # Diffusion coefficients
         self.D_cv = cfg.pde.physics.D_cv
@@ -453,7 +454,7 @@ class Pinnacle():
             # Potential Initial Conditions
             u_initial_pred = self.potential_net(inputs)
             u_initial_t = torch.autograd.grad(u_initial_pred, t, grad_outputs=torch.ones_like(u_initial_pred), retain_graph=True, create_graph=True)[0]
-            poisson_initial_loss = torch.mean((u_initial_pred - (E-(1e2*x)))**2) + torch.mean(u_initial_t ** 2) #This is very stiff! 
+            poisson_initial_loss = torch.mean((u_initial_pred - (E-(1e7*x)))**2) + torch.mean(u_initial_t ** 2) #This is very stiff! 
             # Hole Initial Conditions
             log_h_initial_pred = self.h_net(inputs)
             log_h_initial_t = torch.autograd.grad(log_h_initial_pred, t, grad_outputs=torch.ones_like(log_h_initial_pred), retain_graph=True, create_graph=True)[0]
@@ -762,13 +763,93 @@ class Pinnacle():
             
         return loss_history
     
+    def plot_potential_profiles(self, step="final"):
+        """Plot potential vs position at different times"""
+        plots_dir = f"outputs/plots_{self.cfg.experiment.name}"
+        
+        with torch.no_grad():
+            # Fixed potential for comparison
+            E_fixed = torch.tensor([[0.8]], device=self.device)
+            
+            # Three time points: initial, middle, final
+            times = [0.0, self.time_scale/2, self.time_scale]
+            time_labels = ["t=0 (initial)", f"t={self.time_scale/2:.0f}s (middle)", f"t={self.time_scale:.0f}s (final)"]
+            
+            plt.figure(figsize=(12, 8))
+            
+            for i, (t_val, label) in enumerate(zip(times, time_labels)):
+                # Get film thickness at this time
+                t_tensor = torch.tensor([[t_val]], device=self.device)
+                L_current = self.get_L_value(t_tensor, E_fixed)
+                L_val = L_current.item()
+                
+                # Create spatial grid from 0 to L
+                n_points = 100
+                x_vals = torch.linspace(0, L_val, n_points).to(self.device)
+                t_vals = torch.full((n_points, 1), t_val, device=self.device)
+                E_vals = torch.full((n_points, 1), 0.8, device=self.device)
+                
+                # Get potential predictions
+                inputs = torch.cat([x_vals.unsqueeze(1), t_vals, E_vals], dim=1)
+                u_vals = self.potential_net(inputs)
+                reduced_u_vals = (self.electron_charge)*u_vals/(self.k_B*self.T)
+                
+                # Convert to numpy
+                x_np = x_vals.cpu().numpy()
+                u_np = u_vals.squeeze().cpu().numpy()
+                reduced_u_np = reduced_u_vals.squeeze().cpu().numpy()
+                
+                # Plot
+                plt.subplot(2, 2, i+1)
+                plt.plot(x_np * 1e9, u_np, 'b-', linewidth=2,label="Potential")# Convert to nm
+                plt.plot(x_np*1e9,reduced_u_np, "r-", linewidth=2,label="Reduced Potential")
+                plt.xlabel('Position [nm]')
+                plt.ylabel('Potential [V]')
+                plt.title(f'{label} (L={L_val*1e9:.1f} nm)')
+                plt.legend()
+                plt.grid(True, alpha=0.3)
+                
+                # Print interface values
+                u_at_0 = u_vals[0].item()
+                u_at_L = u_vals[-1].item()
+                print(f"{label}: u(0)={u_at_0:.4f}V, u(L)={u_at_L:.4f}V, drop={u_at_0-u_at_L:.4f}V")
+            
+            # Fourth subplot: Compare all three times
+            plt.subplot(2, 2, 4)
+            for i, (t_val, label) in enumerate(zip(times, time_labels)):
+                t_tensor = torch.tensor([[t_val]], device=self.device)
+                L_current = self.get_L_value(t_tensor, E_fixed)
+                L_val = L_current.item()
+                
+                x_vals = torch.linspace(0, L_val, 100).to(self.device)
+                t_vals = torch.full((100, 1), t_val, device=self.device)
+                E_vals = torch.full((100, 1), 0.8, device=self.device)
+                
+                inputs = torch.cat([x_vals.unsqueeze(1), t_vals, E_vals], dim=1)
+                u_vals = self.potential_net(inputs)
+                
+                x_np = x_vals.cpu().numpy()
+                u_np = u_vals.squeeze().cpu().numpy()
+                
+                plt.plot(x_np * 1e9, u_np, linewidth=2, label=label)
+            
+            plt.xlabel('Position [nm]')
+            plt.ylabel('Potential [V]')
+            plt.title('Potential Evolution Over Time')
+            plt.legend()
+            plt.grid(True, alpha=0.3)
+            
+            plt.tight_layout()
+            plt.savefig(f"{plots_dir}/potential_profiles_step_{step}.png", dpi=300, bbox_inches='tight')
+            plt.close()
+
     def visualize_predictions(self, step="final"):
         """Visualize network predictions across input ranges - now with E dimension"""
         
         # Create output directory
         plots_dir = f"outputs/plots_{self.cfg.experiment.name}"
         os.makedirs(plots_dir, exist_ok=True)
-        
+        self.plot_potential_profiles(step)
         with torch.no_grad():
             # Define input ranges
             n_spatial = 50
@@ -1066,7 +1147,7 @@ def main(cfg: DictConfig):
     # Create comprehensive loss plots
     model.visualize_predictions("best")
     plot_detailed_losses(loss_history,cfg.experiment.name)
-    E_values, current_values = model.generate_polarization_curve(t_eval=1.0)
+    E_values, current_values = model.generate_polarization_curve()
 
 def plot_detailed_losses(loss_history,experiment_name):
     """Create comprehensive plots of all loss components"""
