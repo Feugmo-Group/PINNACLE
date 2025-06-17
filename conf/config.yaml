@@ -163,7 +163,7 @@ experiment:
 hydra:
   run:
     # Create timestamped directories with experiment info
-    dir: outputs/experiments/${experiment.name}/${now:%Y-%m-%d_%H-%M-%S}_run${run.id}
+    dir: outputs/experiments/${experiment.name}/${now:%Y-%m-%d_%H-%M-%S}
   
   sweep:
     dir: outputs/sweeps/${experiment.name}/${now:%Y-%m-%d_%H-%M-%S}
