@@ -14,6 +14,7 @@ from collections import namedtuple
 from hydra.core.hydra_config import HydraConfig
 
 torch.manual_seed(995)#995 is the number stamped onto my necklace
+torch.cuda.empty_cache() #Clear gpu cache before every run
 
 class Swish(nn.Module):
     def forward(self, x):
@@ -160,9 +161,60 @@ class Nexpinnacle():
         self.cc = cfg.pde.scales.cc
         self.chc = self.c_h0
 
+        self.ntk_weights = {
+        'cv_pde': 1.0,
+        'av_pde': 1.0, 
+        'h_pde': 1.0,
+        'poisson_pde': 1.0,
+        'L_physics': 1.0,
+        'boundary': 1.0,
+        'initial': 1.0
+        }
+
+
+        self.ntk_batch_sizes = {}  # Store computed batch sizes
+
+        self.ntk_loss_registry = {
+        'cv_pde': {
+            'sampler': self._sample_interior_points,
+            'loss_computer': self._compute_cv_pde_residual,
+            'batch_size_key': 'interior'
+        },
+        'av_pde': {
+            'sampler': self._sample_interior_points, 
+            'loss_computer': self._compute_av_pde_residual,
+            'batch_size_key': 'interior'
+        },
+        'h_pde': {
+            'sampler': self._sample_interior_points,
+            'loss_computer': self._compute_h_pde_residual, 
+            'batch_size_key': 'interior'
+        },
+        'poisson_pde': {
+            'sampler': self._sample_interior_points,
+            'loss_computer': self._compute_poisson_residual,
+            'batch_size_key': 'interior'
+        },
+        'L_physics': {
+            'sampler': self._sample_L_points,
+            'loss_computer': self._compute_L_residual,
+            'batch_size_key': 'L'
+        },
+        'boundary': {
+            'sampler': self._sample_boundary_points,
+            'loss_computer': self._compute_boundary_residuals_for_ntk,
+            'batch_size_key': 'BC'
+        },
+        'initial': {
+            'sampler': self._sample_initial_points,
+            'loss_computer': self._compute_ic_residuals_for_ntk,
+            'batch_size_key': 'IC'
+        }
+    }
+
 
         # Optimizer
-        params = list(self.potential_net.parameters()) + list(self.CV_net.parameters()) + list(self.AV_net.parameters()) + list(self.h_net.parameters()) + list(self.L_net.parameters())
+        params = self.parameters()
         self.optimizer = optim.AdamW(
             params,
             lr=cfg.optimizer.adam.lr,
@@ -180,6 +232,258 @@ class Nexpinnacle():
             threshold=cfg.scheduler.RLROP.threshold,
             min_lr=cfg.scheduler.RLROP.min_lr,
         )
+
+    #sampling methods to get ntk without boiler plate
+    def parameters(self):
+        return list(self.potential_net.parameters()) + list(self.CV_net.parameters()) + list(self.AV_net.parameters()) + list(self.h_net.parameters()) + list(self.L_net.parameters())
+    def _sample_interior_points(self):
+        """Generate interior collocation points"""
+        batch_size = self.cfg.batch_size.interior
+        t = torch.rand(batch_size, 1, device=self.device)
+        single_E = torch.rand(1,1,device=self.device)*(self.cfg.pde.physics.E_max - self.cfg.pde.physics.E_min) + self.cfg.pde.physics.E_min
+        E = single_E.expand(self.cfg.batch_size.interior,1)
+        L_pred = self.L_net(torch.cat([t, E], dim=1))
+        x = torch.rand(batch_size, 1, device=self.device) * L_pred
+        return x, t, E
+
+    def _sample_boundary_points(self):
+        """Generate boundary collocation points"""
+        batch_size = self.cfg.batch_size.BC
+        t = torch.rand(batch_size, 1, device=self.device)
+        single_E = torch.rand(1,1,device=self.device)*(self.cfg.pde.physics.E_max - self.cfg.pde.physics.E_min) + self.cfg.pde.physics.E_min
+        E = single_E.expand(self.cfg.batch_size.BC,1)
+        # Predict L for f/s boundary
+        L_inputs = torch.cat([t, E], dim=1)
+        L_pred = self.L_net(L_inputs)
+        
+        half_batch = batch_size // 2 #Split batch over both boundaries
+
+        # m/f interface points
+        x_mf = torch.zeros(half_batch, 1, device=self.device)
+        t_mf = t[:half_batch]
+
+         # f/s interface points  
+        x_fs = L_pred[half_batch:]
+        t_fs = t[half_batch:]
+
+        x_boundary = torch.cat([x_mf, x_fs], dim=0)
+        t_boundary = torch.cat([t_mf, t_fs], dim=0)
+        E_boundary = E
+
+        return x_boundary, t_boundary, E_boundary
+
+    def _sample_L_points(self):
+        """Generate L physics points"""
+        batch_size = self.cfg.batch_size.L
+        t = torch.rand(batch_size, 1, device=self.device)
+        single_E = torch.rand(1,1,device=self.device)*(self.cfg.pde.physics.E_max - self.cfg.pde.physics.E_min) + self.cfg.pde.physics.E_min
+        E = single_E.expand(self.cfg.batch_size.L,1)
+        return t, E
+
+    def _sample_initial_points(self):
+        """Generate initial condition points"""
+        batch_size = self.cfg.batch_size.IC
+        t = torch.zeros(batch_size, 1, device=self.device)
+        single_E = torch.rand(1,1,device=self.device)*(self.cfg.pde.physics.E_max - self.cfg.pde.physics.E_min) + self.cfg.pde.physics.E_min
+        E = single_E.expand(self.cfg.batch_size.IC,1)
+        L_pred = self.L_net(torch.cat([t, E], dim=1))
+        x = torch.rand(batch_size, 1, device=self.device) * L_pred
+        return x, t, E
+    
+    #May refactor code to use these later.
+    def _compute_cv_pde_residual(self, x, t, E):
+        """Compute CV PDE residual only"""
+        cd_cv_residual, _, _, _ = self.pde_residuals(x, t, E)
+        return cd_cv_residual
+    
+    def _compute_av_pde_residual(self, x, t, E):
+        """Compute AV PDE residual only"""
+        _, cd_av_residual, _, _ = self.pde_residuals(x, t, E)
+        return cd_av_residual
+
+    def _compute_h_pde_residual(self, x, t, E):
+        """Compute hole PDE residual only"""
+        _, _, cd_h_residual, _ = self.pde_residuals(x, t, E)
+        return cd_h_residual
+
+    def _compute_poisson_residual(self, x, t, E):
+        """Compute Poisson residual only"""
+        _, _, _, poisson_residual = self.pde_residuals(x, t, E)
+        return poisson_residual
+
+    def _compute_L_residual(self, t, E):
+        """Compute L physics residual"""
+        inputs = torch.cat([t, E], dim=1)
+        L_pred = self.L_net(inputs)
+        k1, k2, k3, k4, k5, ktp, ko2 = self.compute_rate_constants(t, E)
+        dl_dt_pred = self._grad(L_pred, t)
+        dL_dt_physics = (1/self.lc) * self.tc * self.Omega * (k2 - k5)
+        return dl_dt_pred - dL_dt_physics
+    
+    def _compute_boundary_residuals_for_ntk(self,x,t,E):
+        """Return only the boundary residuals we need for computing ntk weights"""
+        
+        batch_size = self.cfg.batch_size.BC
+        half_batch = batch_size // 2 #Split batch over both boundaries
+        x_mf = x[:half_batch]
+        x_fs = x[half_batch:]
+        t_mf = t[:half_batch]
+        t_fs = t[half_batch:]
+        #Predict L and compute derrivative for boundary fluxes
+        L_input = torch.cat([t,E],dim=1)
+        L_pred = self.L_net(L_input)
+        L_pred_t = self._grad(L_pred,t)
+
+        inputs_mf = torch.cat([x, t_mf,E], dim=1)
+        # Predicting the potential at m/f interface
+        u_pred_mf = self.potential_net(inputs_mf)
+        u_pred_mf_x = self._grad(u_pred_mf,x_mf)
+
+        #cv at m/f conditions
+        cv_pred_mf = self.CV_net(inputs_mf)
+        cv_pred_mf_x = self._grad(cv_pred_mf,x_mf)
+        cv_mf_residual = (-self.D_cv*self.cc/self.lc)*cv_pred_mf_x - self.k1_0*torch.exp(self.alpha_cv*self.phic*(E/self.phic-u_pred_mf)) - (self.U_cv*self.phic/self.lc*u_pred_mf_x-self.lc/self.tc*L_pred_t)*self.cc*cv_pred_mf
+
+        #av at m/f conditions
+        av_pred_mf = self.AV_net(inputs_mf)
+        av_pred_mf_x = self._grad(av_pred_mf,x_mf)
+        av_mf_residual = (-self.D_av*self.cc/self.lc)*av_pred_mf_x - (4/3)*self.k2_0*torch.exp(self.alpha_av*self.phic*(E/self.phic-u_pred_mf)) - (self.U_av*self.phic/self.lc*u_pred_mf_x-self.lc/self.tc*L_pred_t)*av_pred_mf
+
+        #potential at m/f conditions
+        u_mf_residual = (self.eps_film*self.phic/self.lc * u_pred_mf_x) - self.eps_Ddl*self.phic*(u_pred_mf-E/self.phic)/self.d_Ddl
+
+        # f/s interface conditions
+        inputs_fs = torch.cat([x_fs, t_fs,E], dim=1)
+
+        # Predicting the potential at f/s
+        u_pred_fs = self.potential_net(inputs_fs)
+        u_pred_fs_x = self._grad(u_pred_fs,x_fs)
+
+        # cv at f/s conditions
+        cv_pred_fs = self.CV_net(inputs_fs)
+        cv_pred_fs_x = self._grad(cv_pred_fs,x_fs)
+        cv_fs_residual = (-self.D_cv*self.cc/self.lc)*cv_pred_fs_x - (self.k3_0*torch.exp(self.beta_cv*self.phic*u_pred_fs) - self.U_cv*self.phic/self.lc*u_pred_fs_x)*cv_pred_fs*self.cc#Check this non-diming here
+
+        #av at f/s conditions
+        av_pred_fs = self.AV_net(inputs_fs)
+        av_pred_fs_x = self._grad(av_pred_fs,x_fs)
+        av_fs_residual = (-self.D_av*self.cc/self.lc)*av_pred_fs_x - (self.k4_0*torch.exp(self.alpha_av*u_pred_fs) - self.U_av*self.phic/self.lc*u_pred_fs_x)*av_pred_fs*self.cc
+
+        #Poisson at f/s conditions
+        u_fs_residual = (self.eps_film*self.phic/self.lc * u_pred_fs_x) - (self.eps_Ddl*self.phic*u_pred_fs)
+
+        #Hole at f/s conditions
+        h_fs_pred = self.h_net(inputs_fs)
+        h_fs_pred_x = self._grad(h_fs_pred,x_fs)
+
+        q = torch.where(h_fs_pred <= (1e-9)/self.c_h0,torch.zeros_like(h_fs_pred),- (self.ktp_0 + (self.F*self.D_h*self.phic)/(self.R*self.T*self.lc)*u_pred_fs_x))
+        h_fs_residual = (self.D_h*self.c_h0/self.lc) * h_fs_pred_x - q* self.c_h0*h_fs_pred
+
+        total_residual = torch.cat([cv_mf_residual,cv_fs_residual,av_mf_residual,av_fs_residual,h_fs_residual,u_mf_residual,u_fs_residual])
+
+        return total_residual, cv_mf_residual,cv_fs_residual,av_mf_residual,av_fs_residual,h_fs_residual,u_mf_residual,u_fs_residual
+
+    def _compute_ic_residuals_for_ntk(self,x,t,E):
+        """Return only the initial residuals we need for computing ntk weights"""
+        
+        L_input = torch.cat([t,E],dim=1)
+        L_initial_pred = self.L_net(L_input)
+        inputs = torch.cat([x, t,E], dim=1)
+
+        L_initial_residual = L_initial_pred-self.L_initial/self.lc
+
+        # Cation Vacancy Initial Conditions
+        cv_initial_pred = self.CV_net(inputs)
+        cv_initial_t = self._grad(cv_initial_pred,t)
+        cv_initial_residual = cv_initial_pred + cv_initial_t 
+
+        # Anion Vacancy Initial Conditions
+        av_initial_pred = self.AV_net(inputs)
+        av_initial_t = self._grad(av_initial_pred,t)
+        av_initial_residual = av_initial_pred + av_initial_t 
+
+        # Potential Initial Conditions
+        u_initial_pred = self.potential_net(inputs)
+        u_initial_t = self._grad(u_initial_pred,t)
+        poisson_initial_residual = (u_initial_pred - ((E/self.phic) - (1e7 * (self.lc/self.phic)*x))) + u_initial_t
+
+        # Hole Initial Conditions
+        h_initial_pred = self.h_net(inputs)
+        h_initial_t = self._grad(h_initial_pred,t)
+        h_initial_residual = (h_initial_pred - self.c_h0/self.c_h0) + h_initial_t 
+
+        total_residual = torch.cat([
+        L_initial_residual.flatten(),
+        cv_initial_residual.flatten(), 
+        av_initial_residual.flatten(),
+        poisson_initial_residual.flatten(),
+        h_initial_residual.flatten()
+    ])
+    
+        return total_residual
+    
+    def compute_ntk_trace_for_loss(self, loss_name):
+        """NTK trace computation for any registered loss"""
+        
+        loss_config = self.ntk_loss_registry[loss_name]
+        
+        # Generate collocation points
+        sampler = loss_config['sampler']
+        points = sampler()
+        
+        # Compute loss residual
+        loss_computer = loss_config['loss_computer']
+        residual = loss_computer(*points)
+        
+        # Determine batch size (one-time calculation)
+        if loss_name not in self.ntk_batch_sizes:
+            indices = torch.randperm(len(residual))[:256]
+            residual_sampled = residual[indices]
+            jacobian_sampled = self.compute_jacobian(residual_sampled)
+            self.ntk_batch_sizes[loss_name] = self.compute_minimum_batch_size(jacobian_sampled)
+            print(f"Computed batch size for {loss_name}: {self.ntk_batch_sizes[loss_name]}")
+
+            trace = self.get_ntk(jacobian_sampled, compute='trace')
+            
+            return trace, len(jacobian_sampled)
+
+        else:
+            # Random sampling
+            batch_size = self.ntk_batch_sizes[loss_name]
+            indices = torch.randperm(len(residual))[:batch_size]
+            residual_sampled = residual[indices]
+            jacobian_sampled = self.compute_jacobian(residual_sampled)
+
+            # Compute NTK trace
+            trace = self.get_ntk(jacobian_sampled, compute='trace')
+            
+            return trace, len(jacobian_sampled)
+    
+    def update_ntk_weights(self):
+        """Update all NTK weights"""
+        
+        traces = {}
+        counts = {}
+        
+        # Compute all traces using the registry
+        for loss_name in self.ntk_loss_registry:
+            traces[loss_name], counts[loss_name] = self.compute_ntk_trace_for_loss(loss_name)
+        
+        # Compute weights
+        raw_weights = {}
+        for loss_name in traces:
+            raw_weights[loss_name] = counts[loss_name] / traces[loss_name]
+        
+        # Normalization
+        total_raw_weight = sum(raw_weights.values())
+        normalization = len(raw_weights) / total_raw_weight
+        
+        # Update stored weights
+        for loss_name in self.ntk_weights:
+            self.ntk_weights[loss_name] = raw_weights[loss_name] * normalization
+            
+        # Log the weights
+        print(f"Updated NTK weights: {self.ntk_weights}")
 
     def _grad(self, output, input_var):
         """Take Derrivative of output w.r.t input_var"""
@@ -293,7 +597,7 @@ class Nexpinnacle():
             L_pred = self.L_net(L_inputs)
 
             # Predict the potential on the f/s (x=L) boundary
-            x_fs = torch.ones(t.shape[0], 1, device=self.device) * L_pred
+            x_fs = L_pred
             inputs_fs = torch.cat([x_fs, t, E], dim=1)
             u_fs = self.potential_net(inputs_fs)
 
@@ -381,7 +685,7 @@ class Nexpinnacle():
         # Potential Initial Conditions
         u_initial_pred = self.potential_net(inputs)
         u_initial_t = self._grad(u_initial_pred,t)
-        poisson_initial_loss = torch.mean((u_initial_pred - ((E/self.phic) - 1e7 * (self.lc/self.phic)*x)) ** 2) + torch.mean(u_initial_t ** 2)
+        poisson_initial_loss = torch.mean((u_initial_pred - ((E/self.phic) - (1e7 * (self.lc/self.phic)*x))) ** 2) + torch.mean(u_initial_t ** 2)
 
         # Hole Initial Conditions
         h_initial_pred = self.h_net(inputs)
@@ -397,7 +701,7 @@ class Nexpinnacle():
     def boundary_loss(self):
         """Compute boundary losses with individual tracking"""
 
-        t = torch.ones(self.cfg.batch_size.BC,1,device=self.device,requires_grad=True)
+        t = torch.rand(self.cfg.batch_size.BC,1,device=self.device,requires_grad=True)
         single_E = torch.rand(1,1,device=self.device)*(self.cfg.pde.physics.E_max - self.cfg.pde.physics.E_min) + self.cfg.pde.physics.E_min
         E = single_E.expand(self.cfg.batch_size.BC,1)
         # m/f interface conditions
@@ -431,7 +735,7 @@ class Nexpinnacle():
         u_mf_loss = torch.mean(u_mf_residual**2)
 
         # f/s interface conditions
-        x_fs = torch.ones(self.cfg.batch_size.BC, 1, device=self.device,requires_grad=True)*L_pred
+        x_fs = L_pred
         inputs_fs = torch.cat([x_fs, t,E], dim=1)
 
         # Predicting the potential at f/s
@@ -441,13 +745,13 @@ class Nexpinnacle():
         # cv at f/s conditions
         cv_pred_fs = self.CV_net(inputs_fs)
         cv_pred_fs_x = self._grad(cv_pred_fs,x_fs)
-        cv_fs_residual = (-self.D_cv*self.cc/self.lc)*cv_pred_fs_x - (self.k3_0*torch.exp(self.beta_cv*self.phic*u_pred_fs) - self.U_av*self.phic/self.lc*u_pred_fs_x)*cv_pred_fs*self.cc#Check this non-diming here
+        cv_fs_residual = (-self.D_cv*self.cc/self.lc)*cv_pred_fs_x - (self.k3_0*torch.exp(self.beta_cv*self.phic*u_pred_fs) - self.U_cv*self.phic/self.lc*u_pred_fs_x)*cv_pred_fs*self.cc#Check this non-diming here
         cv_fs_loss = torch.mean(cv_fs_residual**2)
 
         #av at f/s conditions
         av_pred_fs = self.AV_net(inputs_fs)
         av_pred_fs_x = self._grad(av_pred_fs,x_fs)
-        av_fs_residual = (-self.D_av*self.cc/self.lc)*av_pred_fs_x - (self.k4_0*torch.exp(self.alpha_av*u_pred_fs) - self.U_av*self.phic/self.lc*u_pred_fs_x)*cv_pred_fs*self.cc
+        av_fs_residual = (-self.D_av*self.cc/self.lc)*av_pred_fs_x - (self.k4_0*torch.exp(self.alpha_av*u_pred_fs) - self.U_av*self.phic/self.lc*u_pred_fs_x)*av_pred_fs*self.cc
         av_fs_loss = torch.mean(av_fs_residual**2)
 
         #Poisson at f/s conditions
@@ -495,51 +799,120 @@ class Nexpinnacle():
 
         return total_interior_loss, cv_pde_loss, av_pde_loss, h_pde_loss, poisson_pde_loss
     
+
+    def compute_jacobian(self, output):
+        """Get the jacobian of output w.r.t network parameters"""
+        output = output.reshape(-1)
+        grads = torch.autograd.grad(
+            output,
+            list(self.parameters()),
+            (torch.eye(output.shape[0]).to(self.device),),
+            is_grads_batched=True, retain_graph=True
+        )
+        return torch.cat([grad.flatten().reshape(len(output), -1) for grad in grads], 1)
+    
+    def get_ntk(self,jac,compute="trace"):
+        """Get the NTK matrix of jac """
+
+        if compute == 'full':
+            return torch.einsum('Na,Ma->NM', jac, jac)
+        elif compute == 'diag':
+            return torch.einsum('Na,Na->N', jac, jac)
+        elif compute == 'trace':
+            return torch.einsum('Na,Na->', jac, jac)
+        else:
+            raise ValueError('compute must be one of "full",'
+                                + '"diag", or "trace"')
+        
+    def compute_minimum_batch_size(self, jacobian):
+        """Compute minimum batch size for 0.2 approximation error"""
+
+        ntk_diag = self.get_ntk(jacobian, compute='diag')
+
+        # Population statistics
+        mu_X = torch.mean(ntk_diag)
+        sigma_X = torch.std(ntk_diag)
+
+        #Coefficent of Variation
+        v_X = sigma_X / mu_X
+
+        min_batch_size = int(25 * (v_X ** 2))
+
+        # Ensure reasonable bounds
+        min_batch_size = max(min_batch_size, 32)  # At least 32
+        min_batch_size = min(min_batch_size, len(jacobian) // 4)  # At most half the data
+    
+        return min_batch_size
+        
+
+    def get_loss_weights(self):
+        """Get appropriate weights based on weighting strategy"""
+        if self.cfg.training.weight_strat == "ntk":
+            return self.ntk_weights.copy()
+        else:
+            # Regular batch-size based weighting
+            return {
+                'cv_pde': 1/self.cfg.batch_size.interior,
+                'av_pde': 1/self.cfg.batch_size.interior,
+                'h_pde': 1/self.cfg.batch_size.interior, 
+                'poisson_pde': 1/self.cfg.batch_size.interior,
+                'L_physics': 1/self.cfg.batch_size.L,
+                'boundary': 1/self.cfg.batch_size.BC,
+                'initial': 1/self.cfg.batch_size.IC,
+            }
+        
     def total_loss(self):
         """Compute total weighted loss with detailed breakdown"""
-   
+        
+        # Compute individual losses
         interior_loss, cv_pde_loss, av_pde_loss, h_pde_loss, poisson_pde_loss = self.interior_loss()
         ic_loss, cv_ic_loss, av_ic_loss, poisson_ic_loss, h_ic_loss, L_ic_loss = self.initial_condition_loss()
         bc_loss, cv_mf_loss, av_mf_loss, u_mf_loss, cv_fs_loss, av_fs_loss, u_fs_loss, h_fs_loss = self.boundary_loss()
         L_physics_loss = self.L_loss()
         
-
-        total_loss = ((1/self.cfg.batch_size.interior)*interior_loss + 
-                    (1/self.cfg.batch_size.BC)*bc_loss + 
-                    (1/self.cfg.batch_size.IC)*ic_loss+
-                    (1/self.cfg.batch_size.L)*L_physics_loss
-        )
-
-
-        # Create detailed loss dictionary
-        loss_dict = {
-            'total': total_loss,
-            'interior': (1/self.cfg.batch_size.interior)*interior_loss,
-            'boundary': (1/self.cfg.batch_size.BC)*bc_loss,
-            'initial': (1/self.cfg.batch_size.IC)*ic_loss,
-            'L_physics': (1/self.cfg.batch_size.L)*L_physics_loss,
-            # PDE losses
-            'cv_pde': (1/self.cfg.batch_size.interior)*cv_pde_loss,
-            'av_pde': (1/self.cfg.batch_size.interior)*av_pde_loss,
-            'h_pde': (1/self.cfg.batch_size.interior)*h_pde_loss,
-            'poisson_pde': (1/self.cfg.batch_size.interior)*poisson_pde_loss,
-            # Initial condition losses
-            'cv_ic': (1/self.cfg.batch_size.IC)*cv_ic_loss,
-            'av_ic': (1/self.cfg.batch_size.IC)*av_ic_loss,
-            'poisson_ic': (1/self.cfg.batch_size.IC)*poisson_ic_loss,
-            'h_ic': (1/self.cfg.batch_size.IC)*h_ic_loss,
-            'L_ic': (1/self.cfg.batch_size.IC)*L_ic_loss,
-            # Boundary condition losses
-            'cv_mf_bc': (1/self.cfg.batch_size.BC)*cv_mf_loss,
-            'av_mf_bc': (1/self.cfg.batch_size.BC)*av_mf_loss,
-            'u_mf_bc': (1/self.cfg.batch_size.BC)*u_mf_loss,
-            'cv_fs_bc': (1/self.cfg.batch_size.BC)*cv_fs_loss,
-            'av_fs_bc': (1/self.cfg.batch_size.BC)*av_fs_loss,
-            'u_fs_bc': (1/self.cfg.batch_size.BC)*u_fs_loss,
-            'h_fs_bc': (1/self.cfg.batch_size.BC)*h_fs_loss
+        # Get appropriate weights based on strategy
+        weights = self.get_loss_weights()
+        
+        # Compute weighted losses consistently
+        weighted_losses = {
+            'cv_pde': weights['cv_pde'] * cv_pde_loss,
+            'av_pde': weights['av_pde'] * av_pde_loss, 
+            'h_pde': weights['h_pde'] * h_pde_loss,
+            'poisson_pde': weights['poisson_pde'] * poisson_pde_loss,
+            'L_physics': weights['L_physics'] * L_physics_loss,
+            'boundary': weights['boundary'] * bc_loss,
+            'initial': weights['initial'] * ic_loss,
+            
+            # Individual components (for logging)
+            'cv_ic': weights['initial'] * cv_ic_loss, 
+            'av_ic': weights['initial'] * av_ic_loss, 
+            'poisson_ic': weights['initial'] * poisson_ic_loss, 
+            'h_ic': weights['initial'] * h_ic_loss,
+            'L_ic': weights['initial'] * L_ic_loss,
+            
+            'cv_mf_bc': weights['boundary'] * cv_mf_loss,
+            'av_mf_bc': weights['boundary'] * av_mf_loss,
+            'u_mf_bc': weights['boundary'] * u_mf_loss,
+            'cv_fs_bc': weights['boundary'] * cv_fs_loss,
+            'av_fs_bc': weights['boundary'] * av_fs_loss,
+            'u_fs_bc': weights['boundary'] * u_fs_loss,
+            'h_fs_bc': weights['boundary'] * h_fs_loss,
         }
         
-        return loss_dict
+        # Total loss
+        total_loss = (weighted_losses['cv_pde'] + weighted_losses['av_pde'] + 
+                    weighted_losses['h_pde'] + weighted_losses['poisson_pde'] +
+                    weighted_losses['L_physics'] + weighted_losses['boundary'] + 
+                    weighted_losses['initial'])
+        
+        # Add totals for convenience
+        weighted_losses.update({
+            'total': total_loss,
+            'interior': weighted_losses['cv_pde'] + weighted_losses['av_pde'] + 
+                    weighted_losses['h_pde'] + weighted_losses['poisson_pde'],
+        })
+        
+        return weighted_losses
     
     def train_step(self):
         """Perform one training step with detailed loss tracking"""
@@ -595,6 +968,16 @@ class Nexpinnacle():
 
         # Training loop
         for step in tqdm(range(self.cfg.training.max_steps)):
+            
+
+            should_update = (
+            self.cfg.training.weight_strat == "ntk" and 
+            step >= self.cfg.training.ntk_start_step and 
+            step % self.cfg.training.ntk_update_freq == 0
+            )
+
+            if should_update:
+                self.update_ntk_weights()
 
             loss_dict = self.train_step()
             
@@ -728,28 +1111,28 @@ class Nexpinnacle():
             fig, axes = plt.subplots(2, 3, figsize=(18, 12))
             
             # 1. Dimensionless potential field
-            im1 = axes[0,0].contourf(X_hat_np, T_hat_np, phi_hat_np, levels=20, cmap='RdBu_r')
+            im1 = axes[0,0].contourf(X_hat_np, T_hat_np, phi_hat_np, levels=50, cmap='RdBu_r')
             axes[0,0].set_xlabel('Dimensionless Position x̂')
             axes[0,0].set_ylabel('Dimensionless Time t̂')
             axes[0,0].set_title(f'Dimensionless Potential φ̂(x̂,t̂) at Ê={E_hat_fixed.item():.3f}')
             plt.colorbar(im1, ax=axes[0,0])
             
             # 2. Dimensionless cation vacancies
-            im2 = axes[0,1].contourf(X_hat_np, T_hat_np, c_cv_hat_np, levels=20, cmap='Reds')
+            im2 = axes[0,1].contourf(X_hat_np, T_hat_np, c_cv_hat_np, levels=50, cmap='Reds')
             axes[0,1].set_xlabel('Dimensionless Position x̂')
             axes[0,1].set_ylabel('Dimensionless Time t̂')
             axes[0,1].set_title(f'Dimensionless Cation Vacancies ĉ_cv at Ê={E_hat_fixed.item():.3f}')
             plt.colorbar(im2, ax=axes[0,1])
             
             # 3. Dimensionless anion vacancies
-            im3 = axes[0,2].contourf(X_hat_np, T_hat_np, c_av_hat_np, levels=20, cmap='Blues')
+            im3 = axes[0,2].contourf(X_hat_np, T_hat_np, c_av_hat_np, levels=50, cmap='Blues')
             axes[0,2].set_xlabel('Dimensionless Position x̂')
             axes[0,2].set_ylabel('Dimensionless Time t̂')
             axes[0,2].set_title(f'Dimensionless Anion Vacancies ĉ_av at Ê={E_hat_fixed.item():.3f}')
             plt.colorbar(im3, ax=axes[0,2])
             
             # 4. Dimensionless holes
-            im4 = axes[1,0].contourf(X_hat_np, T_hat_np, c_h_hat_np, levels=20, cmap='Purples')
+            im4 = axes[1,0].contourf(X_hat_np, T_hat_np, c_h_hat_np, levels=50, cmap='Purples')
             axes[1,0].set_xlabel('Dimensionless Position x̂')
             axes[1,0].set_ylabel('Dimensionless Time t̂')
             axes[1,0].set_title(f'Dimensionless Holes ĉ_h at Ê={E_hat_fixed.item():.3f}')
@@ -781,7 +1164,7 @@ class Nexpinnacle():
             
             # Save plot
             plot_path = os.path.join(plots_dir, f"predictions_overview_step_{step}.png")
-            plt.savefig(plot_path, dpi=300, bbox_inches='tight')
+            plt.savefig(plot_path, dpi=500, bbox_inches='tight')
             plt.close()
             
             # Print dimensionless statistics
@@ -800,6 +1183,69 @@ class Nexpinnacle():
             tqdm.write(f"Potential scale: {self.phic:.3f} V")
             tqdm.write(f"Final dimensional thickness: {L_hat_np.max() * self.lc * 1e9:.2f} nm")
 
+def plot_detailed_losses(loss_history):
+    """Create comprehensive plots of all loss components"""
+
+    # Create output directory
+    hydra_output_dir = HydraConfig.get().runtime.output_dir
+    plots_dir = os.path.join(hydra_output_dir, "plots")
+    os.makedirs(plots_dir, exist_ok=True)
+
+    fig, axes = plt.subplots(2, 2, figsize=(15, 12))
+    # Total and main components
+    axes[0,0].semilogy(loss_history['total'], label='Total Loss', linewidth=2)
+    axes[0,0].semilogy(loss_history['interior'], label='Interior (PDE)', alpha=0.8)
+    axes[0,0].semilogy(loss_history['boundary'], label='Boundary', alpha=0.8)
+    axes[0,0].semilogy(loss_history['initial'], label='Initial', alpha=0.8)
+    axes[0,0].semilogy(loss_history['L_physics'], label='Film Thickness', alpha=0.8)
+    axes[0,0].set_title('Main Loss Components')
+    axes[0,0].set_xlabel('Training Step')
+    axes[0,0].set_ylabel('Loss (log scale)')
+    axes[0,0].legend()
+    axes[0,0].grid(True, alpha=0.3)
+    
+    # PDE residuals breakdown
+    axes[0,1].semilogy(loss_history['cv_pde'], label='CV PDE', alpha=0.8)
+    axes[0,1].semilogy(loss_history['av_pde'], label='AV PDE', alpha=0.8)
+    axes[0,1].semilogy(loss_history['h_pde'], label='Hole PDE', alpha=0.8)
+    axes[0,1].semilogy(loss_history['poisson_pde'], label='Poisson PDE', alpha=0.8)
+    axes[0,1].set_title('Individual PDE Residuals')
+    axes[0,1].set_xlabel('Training Step')
+    axes[0,1].set_ylabel('Loss (log scale)')
+    axes[0,1].legend()
+    axes[0,1].grid(True, alpha=0.3)
+    
+    # Boundary conditions breakdown
+    axes[1,0].semilogy(loss_history['cv_mf_bc'], label='CV (m/f)', alpha=0.8)
+    axes[1,0].semilogy(loss_history['av_mf_bc'], label='AV (m/f)', alpha=0.8)
+    axes[1,0].semilogy(loss_history['u_mf_bc'], label='Potential (m/f)', alpha=0.8)
+    axes[1,0].semilogy(loss_history['cv_fs_bc'], label='CV (f/s)', alpha=0.8)
+    axes[1,0].semilogy(loss_history['av_fs_bc'], label='AV (f/s)', alpha=0.8)
+    axes[1,0].semilogy(loss_history['u_fs_bc'], label='Potential (f/s)', alpha=0.8)
+    axes[1,0].semilogy(loss_history['h_fs_bc'], label='Hole (f/s)', alpha=0.8)
+    axes[1,0].set_title('Boundary Condition Losses')
+    axes[1,0].set_xlabel('Training Step')
+    axes[1,0].set_ylabel('Loss (log scale)')
+    axes[1,0].legend()
+    axes[1,0].grid(True, alpha=0.3)
+    
+    # Initial conditions breakdown
+    axes[1,1].semilogy(loss_history['cv_ic'], label='CV IC', alpha=0.8)
+    axes[1,1].semilogy(loss_history['av_ic'], label='AV IC', alpha=0.8)
+    axes[1,1].semilogy(loss_history['h_ic'], label='Hole IC', alpha=0.8)
+    axes[1,1].semilogy(loss_history['poisson_ic'], label='Poisson IC', alpha=0.8)
+    axes[1,1].semilogy(loss_history['L_ic'], label='Film Thickness IC', alpha=0.8)
+    axes[1,1].set_title('Initial Condition Losses')
+    axes[1,1].set_xlabel('Training Step')
+    axes[1,1].set_ylabel('Loss (log scale)')
+    axes[1,1].legend()
+    axes[1,1].grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    plot_path = os.path.join(plots_dir, f"losses.png")
+    plt.savefig(plot_path, dpi=500, bbox_inches='tight')
+    plt.close()
+    
 
 @hydra.main(config_path="conf", config_name="config", version_base=None)
 def main(cfg: DictConfig):
@@ -810,6 +1256,9 @@ def main(cfg: DictConfig):
     
     # Train with detailed loss tracking
     loss_history = model.train()
+    
+    #Plot out the loss curve
+    plot_detailed_losses(loss_history)
 
 if __name__ == "__main__":
     main()

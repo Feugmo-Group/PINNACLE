@@ -46,22 +46,17 @@ training:
   rec_results_freq: 100
   rec_inference_freq: 1000
   save_network_freq: 1000
-  causal: 0.001
-  #stage: "physics_first"
-  physics_steps: 6000
+  weight_strat: "null"
+  ntk_update_freq: 500
+  ntk_start_step: 0
 
 # Batch sizes for different constraints
 batch_size:
-  BC: 4096 # Boundary points per boundary
-  interior: 16384 # Interior pointsD_cv
+  BC: 1024 # Boundary points per boundary
+  interior: 4096 # Interior pointsD_cv
   inference: 1024 # Points for inference/visualization
-  IC: 2048
-  L: 2048 #For Predicting the film_thickness
-
-weights:
-  L_initial: 1e7
-  L_physics: 1e15
-
+  IC: 1024
+  L: 1024 #For Predicting the film_thickness
 
 # Custom PDE parameters
 pde:
@@ -76,7 +71,7 @@ pde:
     k_B: 1.3806e-23 # Boltzmann constant [J/K]
     eps0: 8.85e-12 # Vacuum permittivity [F/m]
     E_min: -1.0  # External applied potential [V] - placeholder for now
-    E_max: 1.6
+    E_max: 1.8
     # Diffusion coefficients [m²/s]
     D_cv: 1.0e-21
     D_av: 1.0e-21
@@ -157,7 +152,7 @@ domain:
     L_initial: 1e-9 # Initial film thickness [m]
 
 experiment:
-  name: "NexPINNACLE"  # Give experiments meaningful names
+  name: "nexPINNACLE_reduced_interior_sampling"  # Give experiments meaningful names
 
 # Hydra-specific settings with better logging
 hydra:
