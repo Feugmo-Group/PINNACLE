@@ -236,20 +236,21 @@ class Nexpinnacle():
     #sampling methods to get ntk without boiler plate
     def parameters(self):
         return list(self.potential_net.parameters()) + list(self.CV_net.parameters()) + list(self.AV_net.parameters()) + list(self.h_net.parameters()) + list(self.L_net.parameters())
+    
     def _sample_interior_points(self):
         """Generate interior collocation points"""
         batch_size = self.cfg.batch_size.interior
-        t = torch.rand(batch_size, 1, device=self.device)
+        t = torch.rand(batch_size, 1, device=self.device,requires_grad=True)
         single_E = torch.rand(1,1,device=self.device)*(self.cfg.pde.physics.E_max - self.cfg.pde.physics.E_min) + self.cfg.pde.physics.E_min
         E = single_E.expand(self.cfg.batch_size.interior,1)
         L_pred = self.L_net(torch.cat([t, E], dim=1))
-        x = torch.rand(batch_size, 1, device=self.device) * L_pred
+        x = torch.rand(batch_size, 1, device=self.device,requires_grad=True) * L_pred
         return x, t, E
 
     def _sample_boundary_points(self):
         """Generate boundary collocation points"""
         batch_size = self.cfg.batch_size.BC
-        t = torch.rand(batch_size, 1, device=self.device)
+        t = torch.rand(batch_size, 1, device=self.device,requires_grad=True)
         single_E = torch.rand(1,1,device=self.device)*(self.cfg.pde.physics.E_max - self.cfg.pde.physics.E_min) + self.cfg.pde.physics.E_min
         E = single_E.expand(self.cfg.batch_size.BC,1)
         # Predict L for f/s boundary
@@ -259,23 +260,25 @@ class Nexpinnacle():
         half_batch = batch_size // 2 #Split batch over both boundaries
 
         # m/f interface points
-        x_mf = torch.zeros(half_batch, 1, device=self.device)
+        x_mf = torch.zeros(half_batch, 1, device=self.device,requires_grad=True)
         t_mf = t[:half_batch]
+        E_mf = E[:half_batch]
 
          # f/s interface points  
         x_fs = L_pred[half_batch:]
         t_fs = t[half_batch:]
+        E_fs = E[half_batch:]
 
         x_boundary = torch.cat([x_mf, x_fs], dim=0)
         t_boundary = torch.cat([t_mf, t_fs], dim=0)
-        E_boundary = E
+        E_boundary = torch.cat([E_mf, E_fs], dim=0)
 
         return x_boundary, t_boundary, E_boundary
 
     def _sample_L_points(self):
         """Generate L physics points"""
         batch_size = self.cfg.batch_size.L
-        t = torch.rand(batch_size, 1, device=self.device)
+        t = torch.rand(batch_size, 1, device=self.device,requires_grad=True)
         single_E = torch.rand(1,1,device=self.device)*(self.cfg.pde.physics.E_max - self.cfg.pde.physics.E_min) + self.cfg.pde.physics.E_min
         E = single_E.expand(self.cfg.batch_size.L,1)
         return t, E
@@ -283,11 +286,11 @@ class Nexpinnacle():
     def _sample_initial_points(self):
         """Generate initial condition points"""
         batch_size = self.cfg.batch_size.IC
-        t = torch.zeros(batch_size, 1, device=self.device)
+        t = torch.zeros(batch_size, 1, device=self.device,requires_grad=True)
         single_E = torch.rand(1,1,device=self.device)*(self.cfg.pde.physics.E_max - self.cfg.pde.physics.E_min) + self.cfg.pde.physics.E_min
         E = single_E.expand(self.cfg.batch_size.IC,1)
         L_pred = self.L_net(torch.cat([t, E], dim=1))
-        x = torch.rand(batch_size, 1, device=self.device) * L_pred
+        x = torch.rand(batch_size, 1, device=self.device,requires_grad=True) * L_pred
         return x, t, E
     
     #May refactor code to use these later.
@@ -329,12 +332,16 @@ class Nexpinnacle():
         x_fs = x[half_batch:]
         t_mf = t[:half_batch]
         t_fs = t[half_batch:]
+        E_mf = E[:half_batch]
+        E_fs = E[half_batch:]
         #Predict L and compute derrivative for boundary fluxes
         L_input = torch.cat([t,E],dim=1)
         L_pred = self.L_net(L_input)
         L_pred_t = self._grad(L_pred,t)
+        L_pred_t_mf = L_pred_t[:half_batch]  # For m/f interface  
 
-        inputs_mf = torch.cat([x, t_mf,E], dim=1)
+
+        inputs_mf = torch.cat([x_mf, t_mf,E_mf], dim=1)
         # Predicting the potential at m/f interface
         u_pred_mf = self.potential_net(inputs_mf)
         u_pred_mf_x = self._grad(u_pred_mf,x_mf)
@@ -342,18 +349,18 @@ class Nexpinnacle():
         #cv at m/f conditions
         cv_pred_mf = self.CV_net(inputs_mf)
         cv_pred_mf_x = self._grad(cv_pred_mf,x_mf)
-        cv_mf_residual = (-self.D_cv*self.cc/self.lc)*cv_pred_mf_x - self.k1_0*torch.exp(self.alpha_cv*self.phic*(E/self.phic-u_pred_mf)) - (self.U_cv*self.phic/self.lc*u_pred_mf_x-self.lc/self.tc*L_pred_t)*self.cc*cv_pred_mf
+        cv_mf_residual = (-self.D_cv*self.cc/self.lc)*cv_pred_mf_x - self.k1_0*torch.exp(self.alpha_cv*self.phic*(E_mf/self.phic-u_pred_mf)) - (self.U_cv*self.phic/self.lc*u_pred_mf_x-self.lc/self.tc*L_pred_t_mf)*self.cc*cv_pred_mf
 
         #av at m/f conditions
         av_pred_mf = self.AV_net(inputs_mf)
         av_pred_mf_x = self._grad(av_pred_mf,x_mf)
-        av_mf_residual = (-self.D_av*self.cc/self.lc)*av_pred_mf_x - (4/3)*self.k2_0*torch.exp(self.alpha_av*self.phic*(E/self.phic-u_pred_mf)) - (self.U_av*self.phic/self.lc*u_pred_mf_x-self.lc/self.tc*L_pred_t)*av_pred_mf
+        av_mf_residual = (-self.D_av*self.cc/self.lc)*av_pred_mf_x - (4/3)*self.k2_0*torch.exp(self.alpha_av*self.phic*(E_mf/self.phic-u_pred_mf)) - (self.U_av*self.phic/self.lc*u_pred_mf_x-self.lc/self.tc*L_pred_t_mf)*av_pred_mf
 
         #potential at m/f conditions
-        u_mf_residual = (self.eps_film*self.phic/self.lc * u_pred_mf_x) - self.eps_Ddl*self.phic*(u_pred_mf-E/self.phic)/self.d_Ddl
+        u_mf_residual = (self.eps_film*self.phic/self.lc * u_pred_mf_x) - self.eps_Ddl*self.phic*(u_pred_mf-E_mf/self.phic)/self.d_Ddl
 
         # f/s interface conditions
-        inputs_fs = torch.cat([x_fs, t_fs,E], dim=1)
+        inputs_fs = torch.cat([x_fs, t_fs,E_fs], dim=1)
 
         # Predicting the potential at f/s
         u_pred_fs = self.potential_net(inputs_fs)
@@ -381,7 +388,7 @@ class Nexpinnacle():
 
         total_residual = torch.cat([cv_mf_residual,cv_fs_residual,av_mf_residual,av_fs_residual,h_fs_residual,u_mf_residual,u_fs_residual])
 
-        return total_residual, cv_mf_residual,cv_fs_residual,av_mf_residual,av_fs_residual,h_fs_residual,u_mf_residual,u_fs_residual
+        return total_residual
 
     def _compute_ic_residuals_for_ntk(self,x,t,E):
         """Return only the initial residuals we need for computing ntk weights"""
@@ -437,7 +444,7 @@ class Nexpinnacle():
         
         # Determine batch size (one-time calculation)
         if loss_name not in self.ntk_batch_sizes:
-            indices = torch.randperm(len(residual))[:256]
+            indices = torch.randperm(len(residual),device=self.device)[:256]
             residual_sampled = residual[indices]
             jacobian_sampled = self.compute_jacobian(residual_sampled)
             self.ntk_batch_sizes[loss_name] = self.compute_minimum_batch_size(jacobian_sampled)
@@ -450,7 +457,7 @@ class Nexpinnacle():
         else:
             # Random sampling
             batch_size = self.ntk_batch_sizes[loss_name]
-            indices = torch.randperm(len(residual))[:batch_size]
+            indices = torch.randperm(len(residual),device=self.device)[:batch_size]
             residual_sampled = residual[indices]
             jacobian_sampled = self.compute_jacobian(residual_sampled)
 
@@ -807,9 +814,12 @@ class Nexpinnacle():
             output,
             list(self.parameters()),
             (torch.eye(output.shape[0]).to(self.device),),
-            is_grads_batched=True, retain_graph=True
+            is_grads_batched=True, retain_graph=True,allow_unused=True
         )
-        return torch.cat([grad.flatten().reshape(len(output), -1) for grad in grads], 1)
+        valid_grads = [grad.flatten().reshape(len(output), -1) 
+                   for grad in grads if grad is not None]
+        
+        return torch.cat(valid_grads, 1)
     
     def get_ntk(self,jac,compute="trace"):
         """Get the NTK matrix of jac """
