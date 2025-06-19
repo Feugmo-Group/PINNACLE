@@ -19,7 +19,20 @@ torch.cuda.empty_cache() #Clear gpu cache before every run
 class Swish(nn.Module):
     def forward(self, x):
         return x * torch.sigmoid(x)
-    
+
+class Swoosh(nn.Module):
+    def forward(self, x):
+        return torch.abs(x) * torch.sigmoid(x)
+      
+class Swash(nn.Module):
+    def forward(self, x):
+        return x**2 * torch.sigmoid(x)
+      
+class SquashSwish(nn.Module):
+    def forward(self, x):
+        return x * torch.sigmoid(x) + 0.5
+      
+      
 class FFN(nn.Module):
     """Fully Connected Feed Forward Neural Net"""
 
@@ -173,6 +186,8 @@ class Nexpinnacle():
 
 
         self.ntk_batch_sizes = {}  # Store computed batch sizes
+
+        self.current_step = 0
 
         self.ntk_loss_registry = {
         'cv_pde': {
@@ -479,7 +494,9 @@ class Nexpinnacle():
         # Compute weights
         raw_weights = {}
         for loss_name in traces:
-            raw_weights[loss_name] = counts[loss_name] / traces[loss_name]
+            mean_trace_j = traces[loss_name] / counts[loss_name]
+            sum_all_mean_traces = sum(traces[i]/counts[i] for i in traces)
+            raw_weights[loss_name] = (1.0 / mean_trace_j) * sum_all_mean_traces 
         
         # Normalization
         total_raw_weight = sum(raw_weights.values())
@@ -673,7 +690,7 @@ class Nexpinnacle():
 
         L_input = torch.cat([t,E],dim=1)
         L_initial_pred = self.L_net(L_input)
-        x = torch.rand(self.cfg.batch_size.IC, 1, device=self.device) * L_initial_pred 
+        x = torch.rand(self.cfg.batch_size.IC, 1, device=self.device) * L_initial_pred #might change this to l_initial = 1
         t.requires_grad_(True)
         inputs = torch.cat([x, t,E], dim=1)
 
@@ -731,17 +748,17 @@ class Nexpinnacle():
         cv_mf_residual = (-self.D_cv*self.cc/self.lc)*cv_pred_mf_x - self.k1_0*torch.exp(self.alpha_cv*self.phic*(E/self.phic-u_pred_mf)) - (self.U_cv*self.phic/self.lc*u_pred_mf_x-self.lc/self.tc*L_pred_t)*self.cc*cv_pred_mf
         cv_mf_loss = torch.mean(cv_mf_residual**2)
 
-        #av at m/f conditions
+        #av at m/f conditionsz_
         av_pred_mf = self.AV_net(inputs_mf)
         av_pred_mf_x = self._grad(av_pred_mf,x_mf)
         av_mf_residual = (-self.D_av*self.cc/self.lc)*av_pred_mf_x - (4/3)*self.k2_0*torch.exp(self.alpha_av*self.phic*(E/self.phic-u_pred_mf)) - (self.U_av*self.phic/self.lc*u_pred_mf_x-self.lc/self.tc*L_pred_t)*av_pred_mf
         av_mf_loss = torch.mean(av_mf_residual**2)
 
         #potential at m/f conditions
-        u_mf_residual = (self.eps_film*self.phic/self.lc * u_pred_mf_x) - self.eps_Ddl*self.phic*(u_pred_mf-E/self.phic)/self.d_Ddl
+        u_mf_residual = (self.eps_film*self.phic/self.lc * u_pred_mf_x) - self.eps_Ddl*self.phic*(u_pred_mf-(E/self.phic))/self.d_Ddl
         u_mf_loss = torch.mean(u_mf_residual**2)
 
-        # f/s interface conditions
+        # f/s interface conditions  
         x_fs = L_pred
         inputs_fs = torch.cat([x_fs, t,E], dim=1)
 
@@ -855,9 +872,9 @@ class Nexpinnacle():
         return min_batch_size
         
 
-    def get_loss_weights(self):
+    def get_loss_weights(self,param = "ntk"):
         """Get appropriate weights based on weighting strategy"""
-        if self.cfg.training.weight_strat == "ntk":
+        if self.cfg.training.weight_strat == "ntk" and self.current_step >= self.cfg.training.ntk_start_step:
             return self.ntk_weights.copy()
         else:
             # Regular batch-size based weighting
@@ -978,7 +995,7 @@ class Nexpinnacle():
 
         # Training loop
         for step in tqdm(range(self.cfg.training.max_steps)):
-            
+            self.current_step = step
 
             should_update = (
             self.cfg.training.weight_strat == "ntk" and 
@@ -988,6 +1005,7 @@ class Nexpinnacle():
 
             if should_update:
                 self.update_ntk_weights()
+            
 
             loss_dict = self.train_step()
             
@@ -995,32 +1013,32 @@ class Nexpinnacle():
             for key in loss_history.keys():
                 loss_history[key].append(loss_dict[key])
             
-            # tqdm.write progress with detailed breakdown
+            # print progress with detailed breakdown
             if step % self.cfg.training.rec_results_freq == 0:
-                tqdm.write(f"\n=== Step {step} ===")
-                tqdm.write(f"Total Loss: {loss_dict['total']:.6f}")
-                tqdm.write(f"Interior: {loss_dict['interior']:.6f} | Boundary: {loss_dict['boundary']:.6f} | "
+                print(f"\n=== Step {step} ===")
+                print(f"Total Loss: {loss_dict['total']:.6f}")
+                print(f"Interior: {loss_dict['interior']:.6f} | Boundary: {loss_dict['boundary']:.6f} | "
                     f"Initial: {loss_dict['initial']:.6f} | L_Physics: {loss_dict['L_physics']:.6f}")
                 
-                tqdm.write("\nPDE Residuals:")
-                tqdm.write(f"  CV PDE: {loss_dict['cv_pde']:.6f} | AV PDE: {loss_dict['av_pde']:.6f}")
-                tqdm.write(f"  Hole PDE: {loss_dict['h_pde']:.6f} | Poisson PDE: {loss_dict['poisson_pde']:.6f}")
+                print("\nPDE Residuals:")
+                print(f"  CV PDE: {loss_dict['cv_pde']:.6f} | AV PDE: {loss_dict['av_pde']:.6f}")
+                print(f"  Hole PDE: {loss_dict['h_pde']:.6f} | Poisson PDE: {loss_dict['poisson_pde']:.6f}")
                 
-                tqdm.write("\nBoundary Conditions:")
-                tqdm.write(f"  m/f interface - CV: {loss_dict['cv_mf_bc']:.6f} | AV: {loss_dict['av_mf_bc']:.6f} | U: {loss_dict['u_mf_bc']:.6f}")
-                tqdm.write(f"  f/s interface - CV: {loss_dict['cv_fs_bc']:.6f} | AV: {loss_dict['av_fs_bc']:.6f} | U: {loss_dict['u_fs_bc']:.6f} | H: {loss_dict['h_fs_bc']:.6f}")
+                print("\nBoundary Conditions:")
+                print(f"  m/f interface - CV: {loss_dict['cv_mf_bc']:.6f} | AV: {loss_dict['av_mf_bc']:.6f} | U: {loss_dict['u_mf_bc']:.6f}")
+                print(f"  f/s interface - CV: {loss_dict['cv_fs_bc']:.6f} | AV: {loss_dict['av_fs_bc']:.6f} | U: {loss_dict['u_fs_bc']:.6f} | H: {loss_dict['h_fs_bc']:.6f}")
                 
-                tqdm.write("\nInitial Conditions:")
-                tqdm.write(f"  CV: {loss_dict['cv_ic']:.6f} | AV: {loss_dict['av_ic']:.6f} | H: {loss_dict['h_ic']:.6f}")
-                tqdm.write(f"  Poisson: {loss_dict['poisson_ic']:.6f} | L: {loss_dict['L_ic']:.6f}")
+                print("\nInitial Conditions:")
+                print(f"  CV: {loss_dict['cv_ic']:.6f} | AV: {loss_dict['av_ic']:.6f} | H: {loss_dict['h_ic']:.6f}")
+                print(f"  Poisson: {loss_dict['poisson_ic']:.6f} | L: {loss_dict['L_ic']:.6f}")
                 
                 if hasattr(self, '_L_diagnostics'):
                     d = self._L_diagnostics
-                    tqdm.write(f"\nL Physics Diagnostics:")
-                    tqdm.write(f"  k2: {d['k2_mean']:.2e} | k5: {d['k5_mean']:.2e} | (k2-k5): {d['k2_k5_diff']:.2e}")
-                    tqdm.write(f"  Ω(k2-k5): {d['omega_k2_k5']:.2e}")
-                    tqdm.write(f"  dL/dt predicted: {d['dL_dt_pred']:.2e} | dL/dt physics: {d['dL_dt_physics']:.2e}")
-                    tqdm.write(f"  Current L: {d['L_current']:.2e} | log(L): {d['log_L_current']:.2f}")
+                    print(f"\nL Physics Diagnostics:")
+                    print(f"  k2: {d['k2_mean']:.2e} | k5: {d['k5_mean']:.2e} | (k2-k5): {d['k2_k5_diff']:.2e}")
+                    print(f"  Ω(k2-k5): {d['omega_k2_k5']:.2e}")
+                    print(f"  dL/dt predicted: {d['dL_dt_pred']:.2e} | dL/dt physics: {d['dL_dt_physics']:.2e}")
+                    print(f"  Current L: {d['L_current']:.2e} | log(L): {d['log_L_current']:.2f}")
 
                 current_loss = loss_dict['total']
                 if current_loss < self.best_loss:
@@ -1037,20 +1055,20 @@ class Nexpinnacle():
                     if step % self.cfg.training.rec_inference_freq == 0:
                        self.visualize_predictions(step)
         
-        # Final save and tqdm.write
+        # Final save and print
         final_loss = loss_dict
-        tqdm.write(f"\n=== Final Results (Step {step}) ===")
-        tqdm.write(f"Total Loss: {final_loss['total']:.6f}")
-        tqdm.write("PDE Analysis:")
-        tqdm.write(f"  Worst PDE: {max([('CV', final_loss['cv_pde']), ('AV', final_loss['av_pde']), ('Hole', final_loss['h_pde']), ('Poisson', final_loss['poisson_pde'])], key=lambda x: x[1])}")
+        print(f"\n=== Final Results (Step {step}) ===")
+        print(f"Total Loss: {final_loss['total']:.6f}")
+        print("PDE Analysis:")
+        print(f"  Worst PDE: {max([('CV', final_loss['cv_pde']), ('AV', final_loss['av_pde']), ('Hole', final_loss['h_pde']), ('Poisson', final_loss['poisson_pde'])], key=lambda x: x[1])}")
         
         final_checkpoint_path = os.path.join(checkpoints_dir, "model_final")
         self.save_model(final_checkpoint_path)
 
         if self.best_checkpoint_path:
-            tqdm.write(f"🔄 Loading best checkpoint for inference...")
+            print(f"🔄 Loading best checkpoint for inference...")
             self.load_model(self.best_checkpoint_path)
-            tqdm.write(f"✅ Using best model (loss: {self.best_loss:.6f})")
+            print(f"✅ Using best model (loss: {self.best_loss:.6f})")
             
         return loss_history
     
@@ -1078,10 +1096,10 @@ class Nexpinnacle():
             L_hat_final = self.L_net(torch.cat([t_hat_final, E_hat_fixed],dim=1)).item()
             x_hat_range = torch.linspace(0, L_hat_final, n_spatial).to(self.device)
             
-            tqdm.write(f"Plotting predictions over:")
-            tqdm.write(f"  Dimensionless time range: [0, 1.0]")
-            tqdm.write(f"  Dimensionless spatial range: [0, {L_hat_final:.2f}]")
-            tqdm.write(f"  Fixed dimensionless potential: {E_hat_fixed.item():.3f}")
+            print(f"Plotting predictions over:")
+            print(f"  Dimensionless time range: [0, 1.0]")
+            print(f"  Dimensionless spatial range: [0, {L_hat_final:.2f}]")
+            print(f"  Fixed dimensionless potential: {E_hat_fixed.item():.3f}")
             
             # Create 2D grid for contour plots
             T_hat_mesh, X_hat_mesh = torch.meshgrid(t_hat_range, x_hat_range, indexing='ij')
@@ -1178,20 +1196,103 @@ class Nexpinnacle():
             plt.close()
             
             # Print dimensionless statistics
-            tqdm.write(f"\nDimensionless Prediction Statistics (Step {step}) at Ê={E_hat_fixed.item():.3f}:")
-            tqdm.write("-" * 60)
-            tqdm.write(f"Potential φ̂:          {phi_hat_np.min():.3f} to {phi_hat_np.max():.3f} (mean: {phi_hat_np.mean():.3f})")
-            tqdm.write(f"Cation Vacancies ĉ_cv: {c_cv_hat_np.min():.3f} to {c_cv_hat_np.max():.3f} (mean: {c_cv_hat_np.mean():.3f})")
-            tqdm.write(f"Anion Vacancies ĉ_av:  {c_av_hat_np.min():.3f} to {c_av_hat_np.max():.3f} (mean: {c_av_hat_np.mean():.3f})")
-            tqdm.write(f"Holes ĉ_h:             {c_h_hat_np.min():.3f} to {c_h_hat_np.max():.3f} (mean: {c_h_hat_np.mean():.3f})")
-            tqdm.write(f"Film Thickness L̂:      {L_hat_np.min():.3f} to {L_hat_np.max():.3f}")
+            print(f"\nDimensionless Prediction Statistics (Step {step}) at Ê={E_hat_fixed.item():.3f}:")
+            print("-" * 60)
+            print(f"Potential φ̂:          {phi_hat_np.min():.3f} to {phi_hat_np.max():.3f} (mean: {phi_hat_np.mean():.3f})")
+            print(f"Cation Vacancies ĉ_cv: {c_cv_hat_np.min():.3f} to {c_cv_hat_np.max():.3f} (mean: {c_cv_hat_np.mean():.3f})")
+            print(f"Anion Vacancies ĉ_av:  {c_av_hat_np.min():.3f} to {c_av_hat_np.max():.3f} (mean: {c_av_hat_np.mean():.3f})")
+            print(f"Holes ĉ_h:             {c_h_hat_np.min():.3f} to {c_h_hat_np.max():.3f} (mean: {c_h_hat_np.mean():.3f})")
+            print(f"Film Thickness L̂:      {L_hat_np.min():.3f} to {L_hat_np.max():.3f}")
             
             # Convert back to dimensional units for reference
-            tqdm.write(f"\nCorresponding Dimensional Values:")
-            tqdm.write(f"Time scale: {self.tc:.1e} s")
-            tqdm.write(f"Length scale: {self.lc:.1e} m")
-            tqdm.write(f"Potential scale: {self.phic:.3f} V")
-            tqdm.write(f"Final dimensional thickness: {L_hat_np.max() * self.lc * 1e9:.2f} nm")
+            print(f"\nCorresponding Dimensional Values:")
+            print(f"Time scale: {self.tc:.1e} s")
+            print(f"Length scale: {self.lc:.1e} m")
+            print(f"Potential scale: {self.phic:.3f} V")
+            print(f"Final dimensional thickness: {L_hat_np.max() * self.lc * 1e9:.2f} nm")
+
+    def generate_polarization_curve(self, n_points=50):
+        """Generate polarization curve at specified time"""
+        
+        # Create output directory
+        hydra_output_dir = HydraConfig.get().runtime.output_dir
+        plots_dir = os.path.join(hydra_output_dir, "plots")
+        os.makedirs(plots_dir, exist_ok=True)
+        
+        t_hat_eval = 1.0  # Use final dimensionless time by default
+        
+        print(f"Generating polarization curve at t̂={t_hat_eval}")
+        
+        # Define dimensionless potential range
+        E_hat_min = self.cfg.pde.physics.E_min / self.phic
+        E_hat_max = self.cfg.pde.physics.E_max / self.phic
+        
+        # Define characteristic current density scale
+        # I_c = F * cc / tc (charge per unit time per unit area)
+        I_c = self.F * self.cc / self.tc
+        
+        with torch.no_grad():
+            # Create dimensionless potential sweep
+            E_hat_values = torch.linspace(E_hat_min, E_hat_max, n_points).to(self.device)
+            currents_hat = []
+            
+            for E_hat_val in E_hat_values:
+                # Use dimensionless quantities throughout
+                t_hat_tensor = torch.tensor([[t_hat_eval]], device=self.device)
+                E_hat_tensor = torch.tensor([[E_hat_val.item()]], device=self.device)
+                
+                # Get dimensionless film thickness
+                L_hat_val = self.L_net(torch.cat([t_hat_tensor, E_hat_tensor], dim=1))
+                
+                # Evaluate at interfaces
+                x_hat_fs = L_hat_val  # f/s interface
+                x_hat_mf = torch.zeros_like(L_hat_val)  # m/f interface
+                
+                inputs_fs = torch.cat([x_hat_fs, t_hat_tensor, E_hat_tensor], dim=1)
+                inputs_mf = torch.cat([x_hat_mf, t_hat_tensor, E_hat_tensor], dim=1)
+                
+                # Get dimensionless concentrations and rate constants
+                k1, k2, k3, k4, k5, ktp, ko2 = self.compute_rate_constants(t_hat_tensor, E_hat_tensor, single=True)
+                
+                h_hat_fs = self.h_net(inputs_fs)  # Dimensionless hole concentration
+                cv_hat_mf = self.CV_net(inputs_mf)  # Dimensionless CV concentration
+                
+                # Calculate dimensionless current contributions
+                # Note: k1, k2, etc. have units of 1/time, need to multiply by tc to make dimensionless
+                current_k1_hat = (8.0/3.0) * (k1 * self.tc) * cv_hat_mf
+                current_k2_hat = (8.0/3.0) * (k2 * self.tc)
+                current_k3_hat = (1.0/3.0) * (k3 * self.tc)
+                current_ktp_hat = (-1.0) * (ktp * self.tc) * h_hat_fs
+                
+                total_current_hat = current_k1_hat + current_k2_hat + current_k3_hat + current_ktp_hat
+                currents_hat.append(total_current_hat.item())
+            
+            # Convert to numpy for plotting
+            E_hat_np = E_hat_values.cpu().numpy()
+            I_hat_np = np.array(currents_hat)
+            
+            # Create polarization curve plot
+            plt.figure(figsize=(10, 6))
+            plt.plot(E_hat_np, I_hat_np, 'b-', linewidth=2, label='Total Dimensionless Current')
+            plt.xlabel('Dimensionless Applied Potential Ê = E/φc')
+            plt.ylabel('Dimensionless Current Density Î = I/Ic')
+            plt.title(f'Dimensionless Polarization Curve at t̂={t_hat_eval}')
+            plt.grid(True, alpha=0.3)
+            plt.legend()
+            
+            # Add dimensional scale info to plot
+            plt.figtext(0.02, 0.02, f'Current scale Ic = {I_c:.2e} A/m²\nPotential scale φc = {self.phic:.3f} V', 
+                    fontsize=8, ha='left')
+            
+            # Save plot
+            plot_path = os.path.join(plots_dir, f"polarization_curve_dimensionless.png")
+            plt.savefig(plot_path, dpi=300, bbox_inches='tight')
+            plt.close()
+            
+            print(f"Dimensionless current range: {I_hat_np.min():.2e} to {I_hat_np.max():.2e}")
+            print(f"Corresponding dimensional range: {I_hat_np.min()*I_c:.2e} to {I_hat_np.max()*I_c:.2e} A/m²")
+            
+            return E_hat_np, I_hat_np, I_c  # Return scale for reference
 
 def plot_detailed_losses(loss_history):
     """Create comprehensive plots of all loss components"""
@@ -1259,7 +1360,7 @@ def plot_detailed_losses(loss_history):
 
 @hydra.main(config_path="conf", config_name="config", version_base=None)
 def main(cfg: DictConfig):
-    tqdm.write(OmegaConf.to_yaml(cfg))
+    print(OmegaConf.to_yaml(cfg))
     
     # Create model
     model = Nexpinnacle(cfg)
@@ -1269,6 +1370,8 @@ def main(cfg: DictConfig):
     
     #Plot out the loss curve
     plot_detailed_losses(loss_history)
+
+    model.generate_polarization_curve()
 
 if __name__ == "__main__":
     main()
