@@ -47,16 +47,16 @@ training:
   rec_inference_freq: 1000
   save_network_freq: 1000
   weight_strat: "ntk"
-  ntk_update_freq: 500
+  ntk_update_freq: 200
   ntk_start_step: 0
 
 # Batch sizes for different constraints
 batch_size:
   BC: 1024 # Boundary points per boundary
-  interior: 4096 # Interior pointsD_cv
+  interior: 2048 # Interior pointsD_cv
   inference: 1024 # Points for inference/visualization
   IC: 1024
-  L: 1024 #For Predicting the film_thickness
+  L: 2048 #For Predicting the film_thickness
 
 # Custom PDE parameters
 pde:
@@ -152,7 +152,7 @@ domain:
     L_initial: 1e-9 # Initial film thickness [m]
 
 experiment:
-  name: "base+ntk_reduced_interior_sampling"  # Give experiments meaningful names
+  name: "base_reduced_ntk_activation_tests"  # Give experiments meaningful names
 
 # Hydra-specific settings with better logging
 hydra:
