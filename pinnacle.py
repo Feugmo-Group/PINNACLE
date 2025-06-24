@@ -1208,33 +1208,6 @@ def plot_detailed_losses(loss_history,experiment_name):
     plt.savefig(f"outputs/plots_{experiment_name}/detailed_training_losses.png", dpi=300, bbox_inches='tight')
     plt.close()
     
-    # tqdm.write final analysis
-    final_losses = {k: v[-1] for k, v in loss_history.items()}
-    tqdm.write(f"\nFinal Loss Analysis:")
-    tqdm.write(f"Total Loss: {final_losses['total']:.2e}")
-    
-    pde_losses = {
-        'CV PDE': final_losses['cv_pde'],
-        'AV PDE': final_losses['av_pde'], 
-        'Hole PDE': final_losses['h_pde'],
-        'Poisson PDE': final_losses['poisson_pde']
-    }
-    
-    dominant_pde = max(pde_losses, key=pde_losses.get)
-    tqdm.write(f"Dominant PDE: {dominant_pde} ({pde_losses[dominant_pde]:.2e})")
-    
-    bc_losses = {
-        'CV (m/f)': final_losses['cv_mf_bc'],
-        'AV (m/f)': final_losses['av_mf_bc'],
-        'Potential (m/f)': final_losses['u_mf_bc'],
-        'CV (f/s)': final_losses['cv_fs_bc'],
-        'AV (f/s)': final_losses['av_fs_bc'],
-        'Potential (f/s)': final_losses['u_fs_bc'],
-        'Hole (f/s)': final_losses['h_fs_bc']
-    }
-    
-    dominant_bc = max(bc_losses, key=bc_losses.get)
-    tqdm.write(f"Dominant Boundary Condition: {dominant_bc} ({bc_losses[dominant_bc]:.2e})")
 
 if __name__ == "__main__":
     main()

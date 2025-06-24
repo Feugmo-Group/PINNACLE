@@ -31,6 +31,7 @@ optimizer:
 
 # Learning rate scheduler
 scheduler:
+  type: "RLROP"
   tf_exponential_lr:
     decay_rate: 0.99
     decay_steps: 10000
@@ -47,8 +48,14 @@ training:
   rec_inference_freq: 1000
   save_network_freq: 1000
   weight_strat: "ntk"
-  ntk_update_freq: 200
+  ntk_update_freq: 100
   ntk_start_step: 0
+  brdr:
+    beta_c: 0.999        # Smoothing factor for residual moving average
+    beta_w: 0.999        # Smoothing factor for weight updates  
+    beta_s: -1           # Will be set to (1 - lr) if -1
+    start_step: 1000     # When to start BRDR weighting
+    update_freq: 1       # Update every step (BRDR is cheap)
 
 # Batch sizes for different constraints
 batch_size:
@@ -152,7 +159,7 @@ domain:
     L_initial: 1e-9 # Initial film thickness [m]
 
 experiment:
-  name: "base_reduced_ntk_activation_tests"  # Give experiments meaningful names
+  name: "base_reduced_ntk_architecture_tests"  # Give experiments meaningful names
 
 # Hydra-specific settings with better logging
 hydra:
