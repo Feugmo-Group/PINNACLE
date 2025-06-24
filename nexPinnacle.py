@@ -12,6 +12,7 @@ import torch.onnx
 import onnxruntime as ort
 from collections import namedtuple
 from hydra.core.hydra_config import HydraConfig
+import json
 
 torch.manual_seed(995)#995 is the number stamped onto my necklace
 torch.cuda.empty_cache() #Clear gpu cache before every run
@@ -57,6 +58,16 @@ class FFN(nn.Module):
         # Output layer
         self.output_layer = nn.Linear(self.layer_size, output_dim)
 
+
+    def _initialize_weights(self):
+        """Apply Xavier initialization to all linear layers"""
+        for module in self.modules():
+            if isinstance(module, nn.Linear):
+                # Xavier uniform initialization for weights
+                nn.init.xavier_uniform_(module.weight)
+                # Initialize biases to zero (common practice)
+                if module.bias is not None:
+                    nn.init.zeros_(module.bias)
 
     def forward(self, x):
         x = self.activation(self.input_layer(x))
@@ -188,6 +199,7 @@ class Nexpinnacle():
         self.ntk_batch_sizes = {}  # Store computed batch sizes
 
         self.current_step = 0
+        
 
         self.ntk_loss_registry = {
         'cv_pde': {
@@ -226,6 +238,36 @@ class Nexpinnacle():
             'batch_size_key': 'IC'
         }
     }
+        
+        # BRDR-specific attributes
+        self.brdr_weights = {
+        'cv_pde': 1.0,
+        'av_pde': 1.0, 
+        'h_pde': 1.0,
+        'poisson_pde': 1.0,
+        'L_physics': 1.0,
+        'boundary': 1.0,
+        'initial': 1.0
+    }
+    
+         # Moving averages for R⁴(t) - track for each loss component
+        self.brdr_moving_averages = {
+        'cv_pde': 0.0,
+        'av_pde': 0.0,
+        'h_pde': 0.0, 
+        'poisson_pde': 0.0,
+        'L_physics': 0.0,
+        'boundary': 0.0,
+        'initial': 0.0
+    }
+    
+        # Current squared residuals for irdr computation
+        self.current_residuals_squared = {}
+    
+         # Adaptive scale factor
+        self.brdr_scale_factor = 1.0
+        self.prev_loss = None
+        self.prev_grad_norm = None
 
 
         # Optimizer
@@ -238,15 +280,24 @@ class Nexpinnacle():
             weight_decay=cfg.optimizer.adam.weight_decay
         )
 
+
+
         # Scheduler
-        self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-            self.optimizer,
-            mode="min",
-            factor=cfg.scheduler.RLROP.factor,
-            patience=cfg.scheduler.RLROP.patience,
-            threshold=cfg.scheduler.RLROP.threshold,
-            min_lr=cfg.scheduler.RLROP.min_lr,
-        )
+        if self.cfg.scheduler.type == "RLROP":
+            self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+                self.optimizer,
+                mode="min",
+                factor=cfg.scheduler.RLROP.factor,
+                patience=cfg.scheduler.RLROP.patience,
+                threshold=cfg.scheduler.RLROP.threshold,
+                min_lr=cfg.scheduler.RLROP.min_lr,
+            )
+        else: 
+            self.scheduler = optim.lr_scheduler.ExponentialLR(
+                self.optimizer,
+                gamma= self.cfg.scheduler.tf_exponential_lr.decay_rate,
+                last_epoch=self.cfg.scheduler.tf_exponential_lr.decay_steps
+            )
 
     #sampling methods to get ntk without boiler plate
     def parameters(self):
@@ -508,6 +559,15 @@ class Nexpinnacle():
             
         # Log the weights
         print(f"Updated NTK weights: {self.ntk_weights}")
+
+    def compute_brdr_residuals(self):
+        """Compute individual residual terms for BRDR weighting"""
+        residuals = {}
+
+        x_int, t_int, E_int = self.sample_interior_points()
+        cd_cv_residuals, cd_av_residuals,cd_h_residuals,poisson_residuals = self.pde_residuals(x_int,t_int,E_int)
+        pass
+
 
     def _grad(self, output, input_var):
         """Take Derrivative of output w.r.t input_var"""
@@ -853,22 +913,32 @@ class Nexpinnacle():
         
     def compute_minimum_batch_size(self, jacobian):
         """Compute minimum batch size for 0.2 approximation error"""
-
         ntk_diag = self.get_ntk(jacobian, compute='diag')
-
+        
         # Population statistics
         mu_X = torch.mean(ntk_diag)
         sigma_X = torch.std(ntk_diag)
-
-        #Coefficent of Variation
-        v_X = sigma_X / mu_X
-
+        
+        # Handle near-zero mean case
+        if mu_X.abs() < 1e-8:
+            # Use relative variation instead when mean is tiny
+            if sigma_X < 1e-8:
+                v_X = 1.0  # Uniform case
+            else:
+                # Use median as reference instead of mean
+                median_X = torch.median(ntk_diag)
+                v_X = sigma_X / (median_X.abs() + 1e-8)
+        else:
+            # Normal coefficient of variation
+            v_X = sigma_X / mu_X.abs()
+        
+        # Clamp to reasonable bounds
+        v_X = torch.clamp(v_X, min=0.1, max=5.0)
+        
         min_batch_size = int(25 * (v_X ** 2))
-
-        # Ensure reasonable bounds
-        min_batch_size = max(min_batch_size, 32)  # At least 32
-        min_batch_size = min(min_batch_size, len(jacobian) // 4)  # At most half the data
-    
+        min_batch_size = max(min_batch_size, 32)
+        min_batch_size = min(min_batch_size, len(jacobian) // 4)
+        
         return min_batch_size
         
 
@@ -876,6 +946,16 @@ class Nexpinnacle():
         """Get appropriate weights based on weighting strategy"""
         if self.cfg.training.weight_strat == "ntk" and self.current_step >= self.cfg.training.ntk_start_step:
             return self.ntk_weights.copy()
+        elif self.cfg.training.weight_strat == "None":
+            return {
+            'cv_pde': 1,
+            'av_pde': 1,
+            'h_pde': 1, 
+            'poisson_pde': 1,
+            'L_physics': 1,
+            'boundary': 1,
+            'initial': 1,
+            }
         else:
             # Regular batch-size based weighting
             return {
@@ -977,6 +1057,18 @@ class Nexpinnacle():
             'optimizer': self.optimizer.state_dict(),
         }, f"{name}.pt")
 
+    def save_loss_summary(self, final_loss_dict):
+        """Save both best loss and final loss"""
+        hydra_output_dir = HydraConfig.get().runtime.output_dir
+        
+        final_total_loss = final_loss_dict['total'].item() if torch.is_tensor(final_loss_dict['total']) else final_loss_dict['total']
+        
+        # Simple text file with both losses
+        with open(os.path.join(hydra_output_dir, "loss_summary.txt"), 'w') as f:
+            f.write(f"best_loss={self.best_loss:.6e}\n")
+            f.write(f"final_loss={final_total_loss:.6e}\n")
+        
+
     def train(self):
         """Train the model with detailed loss tracking"""
         
@@ -993,6 +1085,8 @@ class Nexpinnacle():
         checkpoints_dir = os.path.join(hydra_output_dir, "checkpoints")
         os.makedirs(checkpoints_dir, exist_ok=True)
 
+
+        print( f"Total Parameters: {sum(p.numel() for p in self.parameters() if p.requires_grad)}" )  
         # Training loop
         for step in tqdm(range(self.cfg.training.max_steps)):
             self.current_step = step
@@ -1069,7 +1163,10 @@ class Nexpinnacle():
             print(f"🔄 Loading best checkpoint for inference...")
             self.load_model(self.best_checkpoint_path)
             print(f"✅ Using best model (loss: {self.best_loss:.6f})")
-            
+
+        final_loss_dict = self.total_loss()
+        self.save_loss_summary(final_loss_dict)
+
         return loss_history
     
     def visualize_predictions(self, step="final"):
@@ -1212,7 +1309,7 @@ class Nexpinnacle():
             print(f"Final dimensional thickness: {L_hat_np.max() * self.lc * 1e9:.2f} nm")
 
     def generate_polarization_curve(self, n_points=50):
-        """Generate polarization curve at specified time"""
+        """Generate polarization curve at specified time  hh   """
         
         # Create output directory
         hydra_output_dir = HydraConfig.get().runtime.output_dir
@@ -1259,11 +1356,10 @@ class Nexpinnacle():
                 
                 # Calculate dimensionless current contributions
                 # Note: k1, k2, etc. have units of 1/time, need to multiply by tc to make dimensionless
-                current_k1_hat = (8.0/3.0) * (k1 * self.tc) * cv_hat_mf
-                current_k2_hat = (8.0/3.0) * (k2 * self.tc)
-                current_k3_hat = (1.0/3.0) * (k3 * self.tc)
-                current_ktp_hat = (-1.0) * (ktp * self.tc) * h_hat_fs
-                
+                current_k1_hat = (8.0/3.0) * k1  * cv_hat_mf
+                current_k2_hat = (8.0/3.0) * k2 * self.F 
+                current_k3_hat = (1.0/3.0) * k3 * self.F 
+                current_ktp_hat = (-1.0) * ktp  * h_hat_fs * self.F 
                 total_current_hat = current_k1_hat + current_k2_hat + current_k3_hat + current_ktp_hat
                 currents_hat.append(total_current_hat.item())
             
