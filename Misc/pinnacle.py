@@ -989,8 +989,8 @@ class Pinnacle():
     def export_for_netron(self):
         """Export combined model for Netron visualization - updated for 3D inputs"""
         
-        save_path = f"outputs/pinnacle_architecture.onnx"
-        os.makedirs("outputs", exist_ok=True)
+        save_path = f"../outputs/pinnacle_architecture.onnx"
+        os.makedirs("../outputs", exist_ok=True)
         
         # Create a simple combined model
         class CombinedPINNACLE(torch.nn.Module):
@@ -1116,7 +1116,7 @@ class Pinnacle():
             return E_np, I_np
         
 
-@hydra.main(config_path="conf", config_name="config", version_base=None)
+@hydra.main(config_path="../conf", config_name="config", version_base=None)
 def main(cfg: DictConfig):
     tqdm.write(OmegaConf.to_yaml(cfg))
     
