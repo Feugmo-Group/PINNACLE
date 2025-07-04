@@ -49,7 +49,7 @@ training:
   save_network_freq: 1000
   weight_strat: "ntk"
   ntk_update_freq: 100
-  ntk_start_step: 0
+  ntk_start_step: 1000
   brdr:
     beta_c: 0.999        # Smoothing factor for residual moving average
     beta_w: 0.999        # Smoothing factor for weight updates  

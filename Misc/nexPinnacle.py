@@ -200,7 +200,7 @@ class Nexpinnacle():
 
         self.current_step = 0
         
-
+        #TODO: Add equation of residual 
         self.ntk_loss_registry = {
         'cv_pde': {
             'sampler': self._sample_interior_points,
@@ -1454,7 +1454,7 @@ def plot_detailed_losses(loss_history):
     plt.close()
     
 
-@hydra.main(config_path="conf", config_name="config", version_base=None)
+@hydra.main(config_path="../conf", config_name="config", version_base=None)
 def main(cfg: DictConfig):
     print(OmegaConf.to_yaml(cfg))
     
