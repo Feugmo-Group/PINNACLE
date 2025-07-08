@@ -34,7 +34,7 @@ scheduler:
   type: "RLROP"
   tf_exponential_lr:
     decay_rate: 0.99
-    decay_steps: 10000
+    decay_steps: 12000
   RLROP:
     factor: 0.5
     patience: 1000
@@ -49,7 +49,7 @@ training:
   save_network_freq: 1000
   weight_strat: "ntk"
   ntk_update_freq: 100
-  ntk_start_step: 1000
+  ntk_start_step: 0
   brdr:
     beta_c: 0.999        # Smoothing factor for residual moving average
     beta_w: 0.999        # Smoothing factor for weight updates  
@@ -59,7 +59,7 @@ training:
 
 # Batch sizes for different constraints
 batch_size:
-  BC: 1024 # Boundary points per boundary
+  BC: 2048 # Boundary points per boundary
   interior: 2048 # Interior pointsD_cv
   inference: 1024 # Points for inference/visualization
   IC: 1024
@@ -159,7 +159,7 @@ domain:
     L_initial: 1e-9 # Initial film thickness [m]
 
 experiment:
-  name: "base_reduced_ntk_architecture_tests"  # Give experiments meaningful names
+  name: "base_reduced_ntk_results"  # Give experiments meaningful names
 
 # Hydra-specific settings with better logging
 hydra:

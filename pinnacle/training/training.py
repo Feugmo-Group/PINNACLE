@@ -1,4 +1,4 @@
-# pinnacle/training.py
+# training/training.py
 """
 Training orchestration for PINNACLE with integrated NTK weighting.
 
@@ -13,11 +13,11 @@ from tqdm import tqdm
 import os
 import time
 
-from .networks import NetworkManager
-from .physics import ElectrochemicalPhysics
-from .sampling import CollocationSampler
-from .losses import compute_total_loss
-from .weighting import (
+from networks.networks import NetworkManager
+from physics.physics import ElectrochemicalPhysics
+from sampling.sampling import CollocationSampler
+from losses.losses import compute_total_loss
+from weighting.weighting import (
     NTKWeightManager,
     setup_ntk_weighting,
     create_loss_weights_from_config
@@ -111,7 +111,7 @@ class PINNTrainer:
 
     def _setup_loss_weighting(self):
         """Setup the loss weighting strategy based on configuration."""
-        self.weighting_strategy = self.config.get('training', {}).get('weight_strat', 'uniform')
+        self.weighting_strategy = self.config.training.weight_strat 
 
         if self.weighting_strategy == 'ntk':
             # Setup NTK weight manager
@@ -201,7 +201,6 @@ class PINNTrainer:
             if updated_weights is not None:
                 # Store NTK weights for passing to compute_total_loss
                 self.ntk_weights = updated_weights
-                print(f"🔄 Updated NTK weights: {self.ntk_weights}")
         else:
             # Clear NTK weights if not using NTK strategy
             self.ntk_weights = None
@@ -305,10 +304,10 @@ class PINNTrainer:
                 print(f"NTK weights: CV={self.ntk_weights.get('cv_pde', 1.0):.3f}, "
                       f"AV={self.ntk_weights.get('av_pde', 1.0):.3f}, "
                       f"H={self.ntk_weights.get('h_pde', 1.0):.3f}, "
-                      f"Poisson={self.ntk_weights.get('poisson_pde', 1.0):.3f}, "
-                      f"BC={self.ntk_weights.get('boundary', 1.0):.3f}, "
-                      f"IC={self.ntk_weights.get('initial', 1.0):.3f}, "
-                      f"Film={self.ntk_weights.get('film_physics', 1.0):.3f}")
+                      f"Poisson={self.ntk_weights.get('poisson_pde'):.3f}, "
+                      f"BC={self.ntk_weights.get('boundary'):.3f}, "
+                      f"IC={self.ntk_weights.get('initial'):.3f}, "
+                      f"Film={self.ntk_weights.get('film_physics'):.10f}")
             elif self.weighting_strategy != 'uniform':
                 print(f"Standard weights: Interior={self.loss_weights['interior']:.3f}, "
                       f"Boundary={self.loss_weights['boundary']:.3f}, "
@@ -379,22 +378,6 @@ class PINNTrainer:
         if self.scheduler and checkpoint['scheduler']:
             self.scheduler.load_state_dict(checkpoint['scheduler'])
 
-        self.current_step = checkpoint['step']
-        self.loss_history = checkpoint.get('loss_history', self.loss_history)
-        self.best_loss = checkpoint.get('best_loss', float('inf'))
-        self.loss_weights = checkpoint.get('loss_weights', self.loss_weights)
-        self.weighting_strategy = checkpoint.get('weighting_strategy', 'uniform')
-        self.ntk_weights = checkpoint.get('ntk_weights', None)
-
-        # Restore NTK manager state if available
-        if self.ntk_manager is not None and 'ntk_current_weights' in checkpoint:
-            self.ntk_manager.current_weights = checkpoint['ntk_current_weights']
-            self.ntk_manager.optimal_batch_sizes = checkpoint.get('ntk_batch_sizes', {})
-
-        print(f"🔄 Loaded checkpoint from step {self.current_step}")
-        print(f"⚖️  Restored weighting strategy: {self.weighting_strategy}")
-        if self.ntk_weights:
-            print(f"🧠 Restored NTK weights: {self.ntk_weights}")
 
     def handle_checkpointing(self, current_loss: float) -> None:
         """Handle automatic checkpointing logic."""
@@ -430,11 +413,6 @@ class PINNTrainer:
         """
         print(f"🚀 Starting PINNACLE training for {self.max_steps} steps...")
         print(f"⚖️  Using {self.weighting_strategy} loss weighting strategy")
-
-        # Override weights if provided
-        if manual_loss_weights is not None:
-            self.loss_weights = manual_loss_weights
-            print(f"📊 Using manual loss weights: {self.loss_weights}")
 
         # Start timing
         self.start_time = time.time()

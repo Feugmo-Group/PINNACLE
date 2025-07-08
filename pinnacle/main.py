@@ -12,11 +12,11 @@ import os
 from hydra.core.hydra_config import HydraConfig
 
 # Import all our modules
-from pinnacle.networks import NetworkManager
-from pinnacle.physics import ElectrochemicalPhysics
-from pinnacle.sampling import CollocationSampler
-from pinnacle.training import PINNTrainer
-from pinnacle.analysis import analyze_training_results
+from networks.networks import NetworkManager
+from  physics.physics import  ElectrochemicalPhysics
+from sampling.sampling import CollocationSampler
+from training.training import PINNTrainer
+from analysis.analysis import analyze_training_results
 
 
 def run_training(config: DictConfig, device: torch.device) -> PINNTrainer:
@@ -65,7 +65,7 @@ def run_analysis(trainer: PINNTrainer) -> None:
     print(f"📊 Analysis complete! Plots saved to: {plots_dir}")
 
 
-@hydra.main(config_path="conf/", config_name="config", version_base=None)
+@hydra.main(config_path="../conf/", config_name="config", version_base=None)
 def main(cfg: DictConfig) -> None:
     """
     Main execution function for PINNACLE.
@@ -145,7 +145,7 @@ def main(cfg: DictConfig) -> None:
 
 if __name__ == "__main__":
     # Set random seeds for reproducibility
-    torch.manual_seed(995)  # Your necklace number!
+    torch.manual_seed(995) 
 
     # Clear GPU cache
     if torch.cuda.is_available():

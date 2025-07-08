@@ -1,4 +1,4 @@
-# pinnacle/analysis.py
+# analysis/analysis.py
 """
 Analysis and visualization functions for PINNACLE.
 
@@ -8,7 +8,6 @@ Simple functional approach to generate plots and analyze PINN results.
 import torch
 import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib.colors import LinearSegmentedColormap
 from typing import Dict, Any, List, Optional, Tuple
 import os
 
@@ -173,24 +172,23 @@ def visualize_predictions(networks, physics, step: str = "final", save_path: Opt
         print(f"Potential scale: {physics.scales.phic:.3f} V")
         print(f"Final dimensional thickness: {L_hat_np.max() * physics.scales.lc * 1e9:.2f} nm")
 
-
 def generate_polarization_curve(networks, physics, t_hat_eval: float = 1.0, n_points: int = 50,
                                 save_path: Optional[str] = None) -> Tuple[np.ndarray, np.ndarray, float]:
-    """
-    Generate polarization curve at specified time.
+    """ 
+     Generate polarization curve at specified time.
 
-    **Polarization Curve Calculation:**
+    ..math::
+        $$j_1 = \frac{8}{3} F k_1 [Fe] [v_{Fe}^{3'}]$$
 
-    The current density is computed from electrochemical rate constants:
+    ..math::
+        $$j_2 = \frac{8}{3} F k_2 [Fe]$$
 
-    .. math::
-        I = \\frac{8}{3}k_1 \\hat{c}_{cv} + \\frac{8}{3}k_2 F + \\frac{1}{3}k_3 F - k_{tp} \\hat{c}_h F
+    ..math::
+        $$j_3 = \frac{1}{3} F k_3 [Fe_{ox}]$$
 
-    where the rate constants follow Butler-Volmer kinetics:
-
-    .. math::
-        k_i = k_{i,0} \\exp\\left(\\frac{\\alpha_i n_i F}{RT}(E - \\phi)\\right)
-
+    ..math::    
+        $$j_{tp} = 1 \times  F k_{tp} [Fe_3O_4] [H^+]^8 [h^+]$$
+     
     Args:
         networks: NetworkManager instance with trained networks
         physics: ElectrochemicalPhysics instance
@@ -201,20 +199,16 @@ def generate_polarization_curve(networks, physics, t_hat_eval: float = 1.0, n_po
     Returns:
         Tuple of (E_hat_values, I_hat_values, I_c_scale)
     """
+
     print(f"📈 Generating polarization curve at t̂={t_hat_eval}")
 
-    # Define dimensionless potential range
-    E_hat_min = physics.geometry.E_min / physics.scales.phic
-    E_hat_max = physics.geometry.E_max / physics.scales.phic
-
-    # Define characteristic current density scale
-    # I_c = F * cc / tc (charge per unit time per unit area)
-    I_c = physics.constants.F * physics.scales.cc / physics.scales.tc
+    # Define potential range
+    E_hat_min = physics.geometry.E_min/physics.scales.phic 
+    E_hat_max = physics.geometry.E_max/physics.scales.phic
 
     with torch.no_grad():
-        # Create dimensionless potential sweep
         E_hat_values = torch.linspace(E_hat_min, E_hat_max, n_points, device=physics.device)
-        currents_hat = []
+        j={'total':[],'j1':[],'j2':[],'j3':[],'jtp':[]}
 
         for E_hat_val in E_hat_values:
             # Use dimensionless quantities throughout
@@ -237,33 +231,32 @@ def generate_polarization_curve(networks, physics, t_hat_eval: float = 1.0, n_po
 
             h_hat_fs = networks['h'](inputs_fs)  # Dimensionless hole concentration
             cv_hat_mf = networks['cv'](inputs_mf)  # Dimensionless CV concentration
+            av_hat_fs = networks['av'](inputs_fs)
 
-            # Calculate dimensionless current contributions
-            #TO-DO: Need to fix this with the new equations Conrard sent
-            # Note: k1, k2, etc. have units of 1/time, need to multiply by tc to make dimensionless
-            current_k1_hat = (8.0 / 3.0) * k1 * cv_hat_mf
-            current_k2_hat = (8.0 / 3.0) * k2 * physics.constants.F
-            current_k3_hat = (1.0 / 3.0) * k3 * physics.constants.F
-            current_ktp_hat = (-1.0) * ktp * h_hat_fs * physics.constants.F
-            total_current_hat = current_k1_hat + current_k2_hat + current_k3_hat + current_ktp_hat
-            currents_hat.append(total_current_hat.item())
+            #Compute Currents
+            j1 = (8.0/3.0)*physics.constants.F*k1*cv_hat_mf*physics.scales.cc
+            j2 = (8.0/3.0)*physics.constants.F*k2
+            j3 = (1.0/3.0)*physics.constants.F*k3*av_hat_fs*physics.scales.cc
+            jtp = physics.constants.F*ktp*(physics.materials.c_H**8)*h_hat_fs*physics.scales.chc
+            j_total = j1 +j2 + j3 + jtp
+            j["total"].append(j_total.item())
+            j["j1"].append(j1.item())
+            j["j2"].append(j2.item())
+            j["j3"].append(j3.item())
+            j["jtp"].append(jtp.item())
 
         # Convert to numpy for plotting
-        E_hat_np = E_hat_values.cpu().numpy()
-        I_hat_np = np.array(currents_hat)
+        E_np = E_hat_values.cpu().numpy()*physics.scales.phic
+        j_np = np.array(j["total"])
 
         # Create polarization curve plot
         plt.figure(figsize=(10, 6))
-        plt.plot(E_hat_np, I_hat_np, 'b-', linewidth=2, label='Total Dimensionless Current')
-        plt.xlabel('Dimensionless Applied Potential Ê = E/φc')
-        plt.ylabel('Dimensionless Current Density Î = I/Ic')
-        plt.title(f'Dimensionless Polarization Curve at t̂={t_hat_eval}')
+        plt.plot(E_np, j_np, 'b-', linewidth=2, label='Total Current')
+        plt.xlabel('Applied Potential E')
+        plt.ylabel('Current Density j')
+        plt.title(f'Polarization Curve at t̂={t_hat_eval}')
         plt.grid(True, alpha=0.3)
         plt.legend()
-
-        # Add dimensional scale info to plot
-        plt.figtext(0.02, 0.02, f'Current scale Ic = {I_c:.2e} A/m²\nPotential scale φc = {physics.scales.phic:.3f} V',
-                    fontsize=8, ha='left')
 
         # Save plot
         if save_path:
@@ -274,12 +267,6 @@ def generate_polarization_curve(networks, physics, t_hat_eval: float = 1.0, n_po
             plt.show()
 
         plt.close()
-
-        print(f"📊 Dimensionless current range: {I_hat_np.min():.2e} to {I_hat_np.max():.2e}")
-        print(f"📊 Corresponding dimensional range: {I_hat_np.min() * I_c:.2e} to {I_hat_np.max() * I_c:.2e} A/m²")
-
-        return E_hat_np, I_hat_np, I_c
-
 
 def plot_training_losses(loss_history: Dict[str, List[float]], save_path: Optional[str] = None) -> None:
     """
