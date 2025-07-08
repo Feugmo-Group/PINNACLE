@@ -58,17 +58,6 @@ class FFN(nn.Module):
         # Output layer
         self.output_layer = nn.Linear(self.layer_size, output_dim)
 
-
-    def _initialize_weights(self):
-        """Apply Xavier initialization to all linear layers"""
-        for module in self.modules():
-            if isinstance(module, nn.Linear):
-                # Xavier uniform initialization for weights
-                nn.init.xavier_uniform_(module.weight)
-                # Initialize biases to zero (common practice)
-                if module.bias is not None:
-                    nn.init.zeros_(module.bias)
-
     def forward(self, x):
         x = self.activation(self.input_layer(x))
 
@@ -719,7 +708,7 @@ class Nexpinnacle():
 
         # Poisson Residual Calculation
 
-        poisson_residual = u_xx + (self.F*self.lc**2*self.cc*(1/self.phic*self.epsilonf) * (self.z_av * av_pred + self.z_cv * cv_pred))
+        poisson_residual = u_xx + (self.F*self.lc**2*self.cc*(1/(self.phic*self.epsilonf)) * (self.z_av * av_pred + self.z_cv * cv_pred))
 
         return cd_cv_residual, cd_av_residual, cd_h_residual, poisson_residual
 
@@ -734,7 +723,7 @@ class Nexpinnacle():
         # Get rate constants (using predicted L for f/s boundary)
 
         k1, k2, k3, k4, k5, ktp, ko2 = self.compute_rate_constants(t,E)
-
+        #print(f"MONOLITH - k2: {k2.mean().item():.6e}, k5: {k5:.6e}, (k2-k5): {(k2-k5).mean().item():.6e}")
         dl_dt_pred = self._grad(L_pred,t)
 
         dL_dt_physics = (1/self.lc)*self.tc*self.Omega * (k2 - k5)
@@ -1356,11 +1345,10 @@ class Nexpinnacle():
                 
                 # Calculate dimensionless current contributions
                 # Note: k1, k2, etc. have units of 1/time, need to multiply by tc to make dimensionless
-                current_k1_hat = (8.0/3.0) * k1  * cv_hat_mf
                 current_k2_hat = (8.0/3.0) * k2 * self.F 
                 current_k3_hat = (1.0/3.0) * k3 * self.F 
                 current_ktp_hat = (-1.0) * ktp  * h_hat_fs * self.F 
-                total_current_hat = current_k1_hat + current_k2_hat + current_k3_hat + current_ktp_hat
+                total_current_hat = current_k2_hat + current_k3_hat + current_ktp_hat
                 currents_hat.append(total_current_hat.item())
             
             # Convert to numpy for plotting
@@ -1454,7 +1442,7 @@ def plot_detailed_losses(loss_history):
     plt.close()
     
 
-@hydra.main(config_path="../conf", config_name="config", version_base=None)
+@hydra.main(config_path="conf/", config_name="config", version_base=None)
 def main(cfg: DictConfig):
     print(OmegaConf.to_yaml(cfg))
     

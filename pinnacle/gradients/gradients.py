@@ -1,4 +1,4 @@
-# pinnacle/gradients.py
+# gradients/gradients.py
 """
 Gradient computation utilities for Physics-Informed Neural Networks.
 
@@ -120,7 +120,6 @@ class GradientComputer:
                 grad_outputs=grad_outputs,
                 create_graph=create_graph,
                 retain_graph=retain_graph,
-                only_inputs=True
             )[0]
 
             return gradients
@@ -182,7 +181,6 @@ class GradientComputer:
         # Compute second spatial derivatives
         phi_xx = self.compute_derivative(phi_x, x)
 
-
         c_cv_xx = self.compute_derivative(c_cv_x, x)
         c_av_xx = self.compute_derivative(c_av_x, x)
         c_h_xx = self.compute_derivative(c_h_x, x)
@@ -194,44 +192,5 @@ class GradientComputer:
             phi_xx=phi_xx, c_cv_xx=c_cv_xx, c_av_xx=c_av_xx, c_h_xx=c_h_xx
         )
 
-    def compute_gradients_for_loss(
-            self,
-            output: torch.Tensor,
-            network_params: List[torch.nn.Parameter]
-    ) -> torch.Tensor:
-        """
-        Compute gradients of output with respect to network parameters.
-
-        Useful for NTK computations and gradient-based loss weighting.
-
-        Args:
-            output: Loss or residual tensor
-            network_params: List of network parameters
-
-        Returns:
-            Flattened gradient tensor
-        """
-        gradients = torch.autograd.grad(
-            outputs=output,
-            inputs=network_params,
-            grad_outputs=torch.ones_like(output),
-            create_graph=self.config.create_graph,
-            retain_graph=self.config.retain_graph,
-            allow_unused=True
-        )
-
-        # Flatten and concatenate gradients
-        flat_grads = []
-        for grad in gradients:
-            if grad is not None:
-                flat_grads.append(grad.flatten())
-            else:
-                # Handle unused parameters
-                warnings.warn("Some parameters have None gradients (unused in computation)")
-
-        if not flat_grads:
-            raise ValueError("No gradients computed - check that parameters require gradients")
-
-        return torch.cat(flat_grads)
 
     

@@ -1,4 +1,4 @@
-# pinnacle/sampling.py
+# sampling/sampling.py
 """
 Simple collocation point sampling for PINNACLE.
 

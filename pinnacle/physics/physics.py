@@ -1,4 +1,4 @@
-# pinnacle/physics.py
+# physics/physics.py
 """
 Electrochemical physics parameters, calculations, and PDE formulations for PINNACLE.
 """
@@ -6,7 +6,7 @@ Electrochemical physics parameters, calculations, and PDE formulations for PINNA
 import torch
 from typing import Dict, Any, NamedTuple, Tuple
 from dataclasses import dataclass
-from .gradients import GradientComputer, GradientConfig
+from gradients.gradients import GradientComputer, GradientConfig
 
 
 @dataclass
@@ -448,38 +448,3 @@ class ElectrochemicalPhysics:
                             (self.transport.z_av * grads.c_av + self.transport.z_cv * grads.c_cv))
 
         return cv_residual, av_residual, h_residual, poisson_residual
-
-    def compute_film_growth_rate(self, t: torch.Tensor, E: torch.Tensor, networks):
-        """
-        Compute film growth rate from electrochemical kinetics.
-
-        **Film Growth Equation:**
-
-        .. math::
-            \\frac{dL}{dt} = \\Omega (k_2 - k_5)
-
-        where:
-        - :math:`\\Omega` is the molar volume [m³/mol]
-        - :math:`k_2` is the anion incorporation rate [mol/(m²·s)]
-        - :math:`k_5` is the chemical dissolution rate [mol/(m²·s)]
-
-        **Dimensionless Form:**
-
-        .. math::
-            \\frac{d\\hat{L}}{d\\hat{t}} = \\frac{\\hat{t}_c \\Omega}{\\hat{L}_c} (k_2 - k_5)
-
-        Args:
-            t: Time tensor (dimensionless)
-            E: Applied potential tensor
-            networks: NetworkManager instance
-
-        Returns:
-            Film growth rate dL/dt (dimensionless)
-        """
-        # Get rate constants using equations from compute_rate_constants
-        k1, k2, k3, k4, k5, ktp, ko2 = self.compute_rate_constants(t, E, networks)
-
-        # Film growth rate: dL/dt = Ω(k₂ - k₅)
-        dL_dt_dimensionless = (self.scales.tc * self.materials.Omega / self.scales.lc) * (k2 - k5)
-
-        return dL_dt_dimensionless

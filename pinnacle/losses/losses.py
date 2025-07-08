@@ -1,4 +1,4 @@
-# pinnacle/losses.py
+# losses/losses.py
 """
 Loss function calculations for PINNACLE with optional residual extraction for NTK.
 
@@ -304,26 +304,27 @@ Tuple[torch.Tensor, Dict[str, torch.Tensor], torch.Tensor]]:
     cv_initial_pred = networks['cv'](inputs)
     cv_initial_t = physics.grad_computer.compute_derivative(cv_initial_pred, t)
     cv_initial_residual = cv_initial_pred + cv_initial_t
-    cv_initial_loss = torch.mean(cv_initial_residual ** 2)
+    cv_initial_loss = torch.mean(cv_initial_pred**2) + torch.mean(cv_initial_t**2)
 
     # Anion vacancy initial conditions
     av_initial_pred = networks['av'](inputs)
     av_initial_t = physics.grad_computer.compute_derivative(av_initial_pred, t)
     av_initial_residual = av_initial_pred + av_initial_t
-    av_initial_loss = torch.mean(av_initial_residual ** 2)
+    av_initial_loss = torch.mean(av_initial_pred**2) + torch.mean(av_initial_t**2)
 
     # Potential initial conditions
     u_initial_pred = networks['potential'](inputs)
     u_initial_t = physics.grad_computer.compute_derivative(u_initial_pred, t)
     poisson_initial_residual = (u_initial_pred - (
             (E / physics.scales.phic) - (1e7 * (physics.scales.lc / physics.scales.phic) * x))) + u_initial_t
-    poisson_initial_loss = torch.mean(poisson_initial_residual ** 2)
+    poisson_initial_loss = torch.mean((u_initial_pred - (
+            (E / physics.scales.phic) - (1e7 * (physics.scales.lc / physics.scales.phic) * x)))**2) + torch.mean(u_initial_t**2)
 
     # Hole initial conditions
     h_initial_pred = networks['h'](inputs)
     h_initial_t = physics.grad_computer.compute_derivative(h_initial_pred, t)
     h_initial_residual = (h_initial_pred - physics.scales.chc / physics.scales.chc) + h_initial_t
-    h_initial_loss = torch.mean(h_initial_residual ** 2)
+    h_initial_loss = torch.mean((h_initial_pred - physics.scales.chc / physics.scales.chc)**2) + torch.mean(h_initial_t**2)
 
     # Total initial loss
     total_initial_loss = cv_initial_loss + av_initial_loss + poisson_initial_loss + h_initial_loss + L_initial_loss
@@ -383,7 +384,7 @@ def compute_film_physics_loss(t: torch.Tensor, E: torch.Tensor,
 
     # Get rate constants
     k1, k2, k3, k4, k5, ktp, ko2 = physics.compute_rate_constants(t, E, networks)
-
+    #print(f"MODULAR - k2: {k2.mean().item():.6e}, k5: {k5:.6e}, (k2-k5): {(k2-k5).mean().item():.6e}")
     # Compute predicted and physics-based dL/dt
     dl_dt_pred = physics.grad_computer.compute_derivative(L_pred, t)
     dL_dt_physics = (1 / physics.scales.lc) * physics.scales.tc * physics.materials.Omega * (k2 - k5)
@@ -453,19 +454,19 @@ Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor]]]:
     # Apply weights - NTK weights take precedence
     if ntk_weights is not None:
         # Use NTK's granular component weights
-        weighted_cv_pde = ntk_weights.get('cv_pde', 1.0) * interior_breakdown['cv_pde']
-        weighted_av_pde = ntk_weights.get('av_pde', 1.0) * interior_breakdown['av_pde']
-        weighted_h_pde = ntk_weights.get('h_pde', 1.0) * interior_breakdown['h_pde']
-        weighted_poisson_pde = ntk_weights.get('poisson_pde', 1.0) * interior_breakdown['poisson_pde']
+        weighted_cv_pde = ntk_weights.get('cv_pde') * interior_breakdown['cv_pde']
+        weighted_av_pde = ntk_weights.get('av_pde') * interior_breakdown['av_pde']
+        weighted_h_pde = ntk_weights.get('h_pde') * interior_breakdown['h_pde']
+        weighted_poisson_pde = ntk_weights.get('poisson_pde') * interior_breakdown['poisson_pde']
 
         weighted_interior = weighted_cv_pde + weighted_av_pde + weighted_h_pde + weighted_poisson_pde
-        weighted_boundary = ntk_weights.get('boundary', 1.0) * boundary_loss
-        weighted_initial = ntk_weights.get('initial', 1.0) * initial_loss
-        weighted_film = ntk_weights.get('film_physics', 1.0) * film_loss
+        weighted_boundary = ntk_weights.get('boundary') * boundary_loss
+        weighted_initial = ntk_weights.get('initial') * initial_loss
+        weighted_film = ntk_weights.get('film_physics') * film_loss
 
         # Individual boundary and initial components with NTK weighting
-        boundary_weight = ntk_weights.get('boundary', 1.0)
-        initial_weight = ntk_weights.get('initial', 1.0)
+        boundary_weight = ntk_weights.get('boundary')
+        initial_weight = ntk_weights.get('initial')
 
     else:
         # Use standard weights (uniform, batch_size, or manual)

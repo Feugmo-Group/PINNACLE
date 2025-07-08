@@ -1,4 +1,4 @@
-# pinnacle/weighting.py
+# weighting/weighting.py
 """
 Neural Tangent Kernel (NTK) and loss weighting strategies for modular PINNACLE.
 
@@ -27,16 +27,17 @@ from dataclasses import dataclass
 class JacobianResults(NamedTuple):
     """Container for Jacobian computation results"""
     jacobian: torch.Tensor  # Jacobian matrix [batch_size, num_parameters]
-    batch_size: int  # Effective batch size used
+    batch_size: int   # Effective batch size used
     parameter_count: int  # Total number of parameters
 
 
 @dataclass
 class NTKConfig:
     """Configuration for NTK-based weighting"""
+    #TODO: Get this information from config
     update_frequency: int = 100  # How often to update weights
     start_step: int = 1000  # When to start NTK weighting
-    trace_estimation_samples: int = 256  # Samples for trace estimation #TODO: What is this doing!
+    trace_estimation_samples: int = 256  # Samples for trace estimation
 
 
 def compute_jacobian(
@@ -98,21 +99,49 @@ def compute_jacobian(
         else:
             raise e
 
-def compute_ntk_trace(jacobian_result: JacobianResults) -> torch.Tensor:
-    """
-    Compute trace of Neural Tangent Kernel matrix.
+def get_ntk(jac,compute="trace"):
+    """Get the NTK matrix of jac """
 
-    Args:
-        jacobian_result: Result from compute_jacobian
+    if compute == 'full':
+        return torch.einsum('Na,Ma->NM', jac, jac)
+    elif compute == 'diag':
+        return torch.einsum('Na,Na->N', jac, jac)
+    elif compute == 'trace':
+        return torch.einsum('Na,Na->', jac, jac)
+    else:
+        raise ValueError('compute must be one of "full",'
+                            + '"diag", or "trace"')
 
-    Returns:
-        Scalar tensor with NTK trace
-    """
-    jacobian = jacobian_result.jacobian
-    # Trace = sum of diagonal elements = sum of squared norms
-    trace = torch.sum(jacobian * jacobian)
-    return trace
-
+def compute_minimum_batch_size(jacobian):
+    """Compute minimum batch size for 0.2 approximation error"""
+    ntk_diag = get_ntk(jacobian, compute='diag')
+    
+    # Population statistics
+    mu_X = torch.mean(ntk_diag)
+    sigma_X = torch.std(ntk_diag)
+    
+    # Handle near-zero mean case
+    if mu_X.abs() < 1e-8:
+        # Use relative variation instead when mean is tiny
+        if sigma_X < 1e-8:
+            v_X = 1.0  # Uniform case
+        else:
+            # Use median as reference instead of mean
+            median_X = torch.median(ntk_diag)
+            v_X = sigma_X / (median_X.abs() + 1e-8)
+    else:
+        # Normal coefficient of variation
+        v_X = sigma_X / mu_X.abs()
+    
+    # Clamp to reasonable bounds
+    v_X = torch.clamp(v_X, min=0.1, max=5.0)
+    
+    min_batch_size = int(25 * (v_X ** 2))
+    min_batch_size = max(min_batch_size, 32)
+    min_batch_size = min(min_batch_size, len(jacobian) // 4)
+    
+    return min_batch_size
+    
 
 class NTKWeightManager:
     """
@@ -168,13 +197,7 @@ class NTKWeightManager:
         # Update tracking
         self.last_update_step = -1
 
-    def should_update_weights(self, current_step: int) -> bool:
-        """Check if weights should be updated at current step."""
-        return (current_step >= self.config.start_step and
-                current_step % self.config.update_frequency == 0 and
-                current_step != self.last_update_step)
-
-    def compute_loss_weight(
+    def compute_ntk_trace(
             self,
             loss_residuals: torch.Tensor,
             loss_name: str
@@ -189,29 +212,31 @@ class NTKWeightManager:
         Returns:
             Tuple of (ntk_trace, effective_batch_size)
         """
-        # Determine optimal batch size for this loss
-        #TODO: Use nexPinnacle statistics for calculating optimal batch_size
+        # Determine batch size (one-time calculation)
         if loss_name not in self.optimal_batch_sizes:
-            batch_size = min(len(loss_residuals), self.config.trace_estimation_samples)
-            self.optimal_batch_sizes[loss_name] = batch_size
+            indices = torch.randperm(len(loss_residuals),device=self.device)[:256]
+            residual_sampled = loss_residuals[indices]
+            jacobian_sampled = compute_jacobian(residual_sampled,self.networks.get_all_parameters(),self.device)
+            self.optimal_batch_sizes[loss_name] = compute_minimum_batch_size(jacobian_sampled.jacobian)
+            print(f"Computed batch size for {loss_name}: {self.optimal_batch_sizes[loss_name]}")
+
+            trace = get_ntk(jacobian_sampled.jacobian, compute='trace')
+            
+            return trace.item(), jacobian_sampled.batch_size
+
+        #Use computed optimal batch size every other time
         else:
+            # Random sampling
             batch_size = self.optimal_batch_sizes[loss_name]
+            indices = torch.randperm(len(loss_residuals),device=self.device)[:batch_size]
+            residual_sampled = loss_residuals[indices]
+            jacobian_sampled = compute_jacobian(residual_sampled,self.networks.get_all_parameters(),self.device)
 
-        # Sample residuals if needed
-        if len(loss_residuals) > batch_size:
-            indices = torch.randperm(len(loss_residuals), device=self.device)[:batch_size]
-            sampled_residuals = loss_residuals[indices]
-        else:
-            sampled_residuals = loss_residuals
-
-        # Compute Jacobian using functional approach
-        jacobian_result = compute_jacobian(sampled_residuals, self.networks.get_all_parameters(), self.device)
-
-        # Compute NTK trace using functional approach
-        ntk_trace = compute_ntk_trace(jacobian_result)
-
-        return ntk_trace.item(), jacobian_result.batch_size
-
+            # Compute NTK trace
+            trace = get_ntk(jacobian_sampled.jacobian, compute='trace')
+            
+            return trace.item(), jacobian_sampled.batch_size
+        
     def extract_all_residuals(self) -> Dict[str, torch.Tensor]:
         """
         Extract all residuals using the modified loss functions with return_residuals=True.
@@ -219,7 +244,7 @@ class NTKWeightManager:
         This leverages the exact same computation logic as training without duplication.
         """
         # Import the modified loss functions
-        from .losses import (
+        from losses.losses import (
             compute_interior_loss,
             compute_boundary_loss,
             compute_initial_loss,
@@ -275,42 +300,23 @@ class NTKWeightManager:
             Dictionary of normalized weights
         """
 
-        try:
-            # Extract all residuals using modified loss functions
-            all_residuals = self.extract_all_residuals()
+        # Extract all residuals using modified loss functions
+        all_residuals = self.extract_all_residuals()
 
-            ntk_traces = {}
-            batch_sizes = {}
+        ntk_traces = {}
+        batch_sizes = {}
 
-            # Compute NTK trace for each component
-            for component_name, residual in all_residuals.items():
-                if len(residual) > 0:
-                    ntk_trace, effective_batch_size = self.compute_loss_weight(residual, component_name)
-                    ntk_traces[component_name] = ntk_trace
-                    batch_sizes[component_name] = effective_batch_size
-                    print(f"  {component_name}: NTK trace = {ntk_trace:.2e}, batch = {effective_batch_size}")
-                else:
-                    warnings.warn(f"Empty residuals for {component_name}, skipping")
+        # Compute NTK trace for each component
+        for component_name, residual in all_residuals.items():
+            if len(residual) > 0:
+                ntk_trace, effective_batch_size = self.compute_ntk_trace(residual, component_name)
+                ntk_traces[component_name] = ntk_trace
+                batch_sizes[component_name] = effective_batch_size
 
-        except Exception as e:
-            warnings.warn(f"Failed to compute NTK weights: {e}")
-            # Fallback to uniform weights
-            return {
-                'cv_pde': 1.0, 'av_pde': 1.0, 'h_pde': 1.0, 'poisson_pde': 1.0,
-                'boundary': 1.0, 'initial': 1.0, 'film_physics': 1.0
-            }
-
-        if not ntk_traces:
-            warnings.warn("No valid NTK traces computed, using uniform weights")
-            return {
-                'cv_pde': 1.0, 'av_pde': 1.0, 'h_pde': 1.0, 'poisson_pde': 1.0,
-                'boundary': 1.0, 'initial': 1.0, 'film_physics': 1.0
-            }
 
         # Compute normalized weights
         weights = self._normalize_ntk_weights(ntk_traces, batch_sizes)
 
-        print(f"📊 Updated NTK weights: {weights}")
         self.current_weights = weights
 
         return weights
@@ -335,26 +341,23 @@ class NTKWeightManager:
         for name in ntk_traces:
             mean_traces[name] = ntk_traces[name] / batch_sizes[name]
 
-        # Compute raw weights (inverse of mean traces)
+        # Compute raw weights
         raw_weights = {}
         for name, mean_trace in mean_traces.items():
             if mean_trace > 1e-12:  # Avoid division by zero
-                raw_weights[name] = 1.0 / mean_trace
+                sum_all_mean_traces = sum(mean_traces[n] for n,_ in mean_traces.items())
+                raw_weights[name] = 1.0 / mean_trace * sum_all_mean_traces
             else:
                 raw_weights[name] = 1.0
 
         # Normalize weights
-        total_weight = sum(raw_weights.values())
-        num_losses = len(raw_weights)
-
-        if total_weight > 1e-12:
-            normalized_weights = {
-                name: (weight / total_weight) * num_losses
-                for name, weight in raw_weights.items()
-            }
-        else:
-            # Fallback to uniform weights
-            normalized_weights = {name: 1.0 for name in raw_weights.keys()}
+        total_raw_weight = sum(raw_weights.values())
+        normalization = len(raw_weights)/total_raw_weight
+        
+        normalized_weights = {
+            name: raw_weights[name] * normalization
+            for name, weight in raw_weights.items()
+        }
 
         return normalized_weights
 
@@ -368,7 +371,9 @@ class NTKWeightManager:
         Returns:
             Updated weights if computed, None otherwise
         """
-        if not self.should_update_weights(current_step):
+        if not (current_step >= self.config.start_step and
+                current_step % self.config.update_frequency == 0 and
+                current_step != self.last_update_step):
             return None
 
         self.last_update_step = current_step
@@ -420,9 +425,9 @@ def create_loss_weights_from_config(config: Dict[str, Any]) -> Dict[str, float]:
     Returns:
         Dictionary of loss weights
     """
-    weight_strategy = config.get('training', {}).get('weight_strat', 'uniform')
+    weight_strategy = config.get('../training', {}).get('weight_strat', 'uniform')
 
-    if weight_strategy == 'uniform':
+    if weight_strategy == 'None':
         return {
             'interior': 1.0,
             'boundary': 1.0,
@@ -447,7 +452,7 @@ def create_loss_weights_from_config(config: Dict[str, Any]) -> Dict[str, float]:
         }
     else:
         # Manual weights (should be specified in config)
-        manual_weights = config.get('training', {}).get('manual_weights', {})
+        manual_weights = config.get('../training', {}).get('manual_weights', {})
         default_weights = {
             'interior': 1.0,
             'boundary': 1.0,

@@ -1,4 +1,4 @@
-# pinnacle/networks.py
+# networks/networks.py
 """
 Neural network architectures and management for PINNACLE.
 """
@@ -56,7 +56,7 @@ class FFN(nn.Module):
             hidden_layers: int = 5,
             layer_size: int = 20,
             activation: str = "swish",
-            initialize_weights: bool = True
+            initialize_weights: bool = False
     ):
         super(FFN, self).__init__()
 
@@ -92,24 +92,10 @@ class FFN(nn.Module):
         # Output layer
         self.output_layer = nn.Linear(self.layer_size, output_dim)
 
-        # Initialize weights if requested
-        if initialize_weights:
-            self._initialize_weights()
-
-    def _initialize_weights(self):
-        """Apply Xavier initialization to all linear layers"""
-        for module in self.modules():
-            if isinstance(module, nn.Linear):
-                # Xavier uniform initialization for weights
-                nn.init.xavier_uniform_(module.weight)
-                # Initialize biases to zero (common practice)
-                if module.bias is not None:
-                    nn.init.zeros_(module.bias)
-
     def forward(self, x):
         x = self.activation(self.input_layer(x))
 
-        for layer in self.hidden_layers:  # Removed unnecessary enumerate
+        for layer in self.hidden_layers: 
             x = self.activation(layer(x))
 
         return self.output_layer(x)
@@ -279,27 +265,3 @@ class NetworkManager:
         return self.networks.keys()
 
 
-# Legacy compatibility
-class NexPinnacle(nn.Module):
-    """
-    DEPRECATED: Use NetworkManager instead.
-
-    Legacy class for backward compatibility.
-    """
-
-    def __init__(self, cfg):
-        super(NexPinnacle, self).__init__()
-        print("Warning: NexPinnacle is deprecated. Use NetworkManager instead.")
-
-        self.cfg = cfg
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-        # Use NetworkManager internally
-        self.network_manager = NetworkManager(cfg, self.device)
-
-        # Expose networks as attributes for backward compatibility
-        self.potential_net = self.network_manager['potential']
-        self.CV_net = self.network_manager['cv']
-        self.AV_net = self.network_manager['av']
-        self.h_net = self.network_manager['h']
-        self.L_net = self.network_manager['film_thickness']
