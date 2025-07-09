@@ -34,7 +34,7 @@ scheduler:
   type: "RLROP"
   tf_exponential_lr:
     decay_rate: 0.99
-    decay_steps: 12000
+    decay_steps: 10000
   RLROP:
     factor: 0.5
     patience: 1000
@@ -59,8 +59,8 @@ training:
 
 # Batch sizes for different constraints
 batch_size:
-  BC: 2048 # Boundary points per boundary
-  interior: 2048 # Interior pointsD_cv
+  BC: 1024 # Boundary points per boundary, modular version will require 2048 for 1024 at each boundary
+  interior: 2048 # Interior points
   inference: 1024 # Points for inference/visualization
   IC: 1024
   L: 2048 #For Predicting the film_thickness
@@ -159,7 +159,7 @@ domain:
     L_initial: 1e-9 # Initial film thickness [m]
 
 experiment:
-  name: "base_reduced_ntk_results"  # Give experiments meaningful names
+  name: "refactor_debug"  # Give experiments meaningful names
 
 # Hydra-specific settings with better logging
 hydra:

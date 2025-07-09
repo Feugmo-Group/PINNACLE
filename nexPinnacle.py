@@ -973,7 +973,7 @@ class Nexpinnacle():
         weighted_losses = {
             'cv_pde': weights['cv_pde'] * cv_pde_loss,
             'av_pde': weights['av_pde'] * av_pde_loss, 
-            'h_pde': weights['h_pde'] * h_pde_loss,
+            'h_pde': (1/10000)*weights['h_pde'] * h_pde_loss,
             'poisson_pde': weights['poisson_pde'] * poisson_pde_loss,
             'L_physics': weights['L_physics'] * L_physics_loss,
             'boundary': weights['boundary'] * bc_loss,
@@ -1145,6 +1145,8 @@ class Nexpinnacle():
         print("PDE Analysis:")
         print(f"  Worst PDE: {max([('CV', final_loss['cv_pde']), ('AV', final_loss['av_pde']), ('Hole', final_loss['h_pde']), ('Poisson', final_loss['poisson_pde'])], key=lambda x: x[1])}")
         
+
+        self.visualize_predictions()
         final_checkpoint_path = os.path.join(checkpoints_dir, "model_final")
         self.save_model(final_checkpoint_path)
 
@@ -1297,6 +1299,8 @@ class Nexpinnacle():
             print(f"Potential scale: {self.phic:.3f} V")
             print(f"Final dimensional thickness: {L_hat_np.max() * self.lc * 1e9:.2f} nm")
 
+
+
     def generate_polarization_curve(self, n_points=50):
         """Generate polarization curve at specified time  hh   """
         
@@ -1313,70 +1317,74 @@ class Nexpinnacle():
         E_hat_min = self.cfg.pde.physics.E_min / self.phic
         E_hat_max = self.cfg.pde.physics.E_max / self.phic
         
-        # Define characteristic current density scale
-        # I_c = F * cc / tc (charge per unit time per unit area)
-        I_c = self.F * self.cc / self.tc
         
         with torch.no_grad():
             # Create dimensionless potential sweep
-            E_hat_values = torch.linspace(E_hat_min, E_hat_max, n_points).to(self.device)
-            currents_hat = []
+            E_hat_values = torch.linspace(E_hat_min, E_hat_max, n_points, device=self.device)
+            j={'total':[],'j1':[],'j2':[],'j3':[],'jtp':[]}
             
             for E_hat_val in E_hat_values:
                 # Use dimensionless quantities throughout
                 t_hat_tensor = torch.tensor([[t_hat_eval]], device=self.device)
                 E_hat_tensor = torch.tensor([[E_hat_val.item()]], device=self.device)
-                
+
                 # Get dimensionless film thickness
                 L_hat_val = self.L_net(torch.cat([t_hat_tensor, E_hat_tensor], dim=1))
-                
+
                 # Evaluate at interfaces
                 x_hat_fs = L_hat_val  # f/s interface
                 x_hat_mf = torch.zeros_like(L_hat_val)  # m/f interface
-                
+
                 inputs_fs = torch.cat([x_hat_fs, t_hat_tensor, E_hat_tensor], dim=1)
                 inputs_mf = torch.cat([x_hat_mf, t_hat_tensor, E_hat_tensor], dim=1)
-                
+
                 # Get dimensionless concentrations and rate constants
-                k1, k2, k3, k4, k5, ktp, ko2 = self.compute_rate_constants(t_hat_tensor, E_hat_tensor, single=True)
-                
+                k1, k2, k3, k4, k5, ktp, ko2 = self.compute_rate_constants(t_hat_tensor, E_hat_tensor,
+                                                                                single=True)
+
                 h_hat_fs = self.h_net(inputs_fs)  # Dimensionless hole concentration
                 cv_hat_mf = self.CV_net(inputs_mf)  # Dimensionless CV concentration
-                
-                # Calculate dimensionless current contributions
-                # Note: k1, k2, etc. have units of 1/time, need to multiply by tc to make dimensionless
-                current_k2_hat = (8.0/3.0) * k2 * self.F 
-                current_k3_hat = (1.0/3.0) * k3 * self.F 
-                current_ktp_hat = (-1.0) * ktp  * h_hat_fs * self.F 
-                total_current_hat = current_k2_hat + current_k3_hat + current_ktp_hat
-                currents_hat.append(total_current_hat.item())
-            
+                av_hat_fs = self.AV_net(inputs_fs)
+
+                #Compute Currents
+                j1 = (8.0/3.0)*self.F*k1*cv_hat_mf*self.cc
+                j2 = (8.0/3.0)*self.F*k2
+                j3 = (1.0/3.0)*self.F*k3*av_hat_fs*self.cc
+                jtp = self.F*ktp*(self.c_H**9)*h_hat_fs*self.chc
+                j_total = j1 +j2 + j3 + jtp
+                j["total"].append(j_total.item())
+                j["j1"].append(j1.item())
+                j["j2"].append(j2.item())
+                j["j3"].append(j3.item())
+                j["jtp"].append(jtp.item())
+
             # Convert to numpy for plotting
-            E_hat_np = E_hat_values.cpu().numpy()
-            I_hat_np = np.array(currents_hat)
-            
+            E_np = E_hat_values.cpu().numpy()*self.phic
+            j_np = np.array(j["total"])
+            j_1_np = np.array(j['j1'])
+            j_2_np = np.array(j['j2'])
+            j_3_np = np.array(j['j3'])
+            j_tp_np = np.array(j['jtp'])
+
             # Create polarization curve plot
             plt.figure(figsize=(10, 6))
-            plt.plot(E_hat_np, I_hat_np, 'b-', linewidth=2, label='Total Dimensionless Current')
-            plt.xlabel('Dimensionless Applied Potential Ê = E/φc')
-            plt.ylabel('Dimensionless Current Density Î = I/Ic')
-            plt.title(f'Dimensionless Polarization Curve at t̂={t_hat_eval}')
+            plt.plot(E_np, j_np, 'b-', linewidth=2, label='Total Current')
+            plt.plot(E_np, j_1_np, 'r-', linewidth=2, label='Current due to R1')
+            plt.plot(E_np, j_2_np, 'g-', linewidth=2, label='Current due to R2')
+            plt.plot(E_np, j_3_np, 'o-', linewidth=2, label='Current due to R3')
+            plt.plot(E_np, j_tp_np, 'm-', linewidth=2, label='Current due to RTP')
+            plt.xlabel('Applied Potential E')
+            plt.ylabel('Current Density j')
+            plt.title(f'Polarization Curve at t̂={t_hat_eval}')
+            plt.legend()
             plt.grid(True, alpha=0.3)
             plt.legend()
             
-            # Add dimensional scale info to plot
-            plt.figtext(0.02, 0.02, f'Current scale Ic = {I_c:.2e} A/m²\nPotential scale φc = {self.phic:.3f} V', 
-                    fontsize=8, ha='left')
-            
+
             # Save plot
             plot_path = os.path.join(plots_dir, f"polarization_curve_dimensionless.png")
             plt.savefig(plot_path, dpi=300, bbox_inches='tight')
             plt.close()
-            
-            print(f"Dimensionless current range: {I_hat_np.min():.2e} to {I_hat_np.max():.2e}")
-            print(f"Corresponding dimensional range: {I_hat_np.min()*I_c:.2e} to {I_hat_np.max()*I_c:.2e} A/m²")
-            
-            return E_hat_np, I_hat_np, I_c  # Return scale for reference
 
 def plot_detailed_losses(loss_history):
     """Create comprehensive plots of all loss components"""

@@ -18,34 +18,23 @@ gradient flow pathologies in physics-informed neural networks.
 """
 
 import torch
-import warnings
 from typing import Dict, List, Tuple, Optional, Callable, Any, NamedTuple
 from dataclasses import dataclass
-
-
-
-class JacobianResults(NamedTuple):
-    """Container for Jacobian computation results"""
-    jacobian: torch.Tensor  # Jacobian matrix [batch_size, num_parameters]
-    batch_size: int   # Effective batch size used
-    parameter_count: int  # Total number of parameters
 
 
 @dataclass
 class NTKConfig:
     """Configuration for NTK-based weighting"""
-    #TODO: Get this information from config
     update_frequency: int = 100  # How often to update weights
-    start_step: int = 1000  # When to start NTK weighting
+    start_step: int = 0  # When to start NTK weighting
     trace_estimation_samples: int = 256  # Samples for trace estimation
 
-
 def compute_jacobian(
-        outputs: torch.Tensor,
+        output: torch.Tensor,
         parameters: List[torch.nn.Parameter],
         device: torch.device
-) -> JacobianResults:
-    """
+) -> torch.Tensor:
+        """
     Compute Jacobian matrix using fast batched gradient computation.
 
     Args:
@@ -54,52 +43,22 @@ def compute_jacobian(
         device: PyTorch device
 
     Returns:
-        JacobianResults with jacobian matrix and metadata
+        Jacobian matrix 
     """
-    # Ensure outputs are 1D
-    outputs = outputs.reshape(-1)
-    batch_size = outputs.shape[0]
-
-    if batch_size == 0:
-        raise ValueError("Empty outputs tensor provided")
-
-    try:
-        # Fast batched gradient computation
+        output = output.reshape(-1)
         grads = torch.autograd.grad(
-            outputs,
-            parameters,
-            grad_outputs=torch.eye(batch_size, device=device),
-            is_grads_batched=True,
-            retain_graph=True,
-            allow_unused=True
+            output,
+            list(parameters),
+            (torch.eye(output.shape[0]).to(device),),
+            is_grads_batched=True, retain_graph=True,allow_unused=True
         )
+        valid_grads = [grad.flatten().reshape(len(output), -1) 
+                   for grad in grads if grad is not None]
+        
+        return torch.cat(valid_grads, 1)
 
-        # Process gradients
-        valid_grads = []
-        for grad in grads:
-            if grad is not None:
-                grad_flat = grad.flatten(start_dim=1)
-                valid_grads.append(grad_flat)
-
-        if not valid_grads:
-            raise ValueError("No valid gradients computed")
-
-        # Concatenate all parameter gradients
-        jacobian = torch.cat(valid_grads, dim=1)  # [batch_size, total_parameters]
-
-        return JacobianResults(
-            jacobian=jacobian,
-            batch_size=batch_size,
-            parameter_count=jacobian.shape[1]
-        )
-
-    except RuntimeError as e:
-        if "is_grads_batched" in str(e):
-            warnings.warn("Batched gradients not supported")
-        else:
-            raise e
-
-def get_ntk(jac,compute="trace"):
+def get_ntk(jac:torch.Tensor
+            ,compute="trace") -> torch.Tensor:
     """Get the NTK matrix of jac """
 
     if compute == 'full':
@@ -185,7 +144,7 @@ class NTKWeightManager:
         self.networks = networks
         self.physics = physics
         self.sampler = sampler
-        self.config = config or NTKConfig()
+        self.config = config 
         self.device = physics.device
 
         # Storage for computed batch sizes (optimization)
@@ -217,12 +176,12 @@ class NTKWeightManager:
             indices = torch.randperm(len(loss_residuals),device=self.device)[:256]
             residual_sampled = loss_residuals[indices]
             jacobian_sampled = compute_jacobian(residual_sampled,self.networks.get_all_parameters(),self.device)
-            self.optimal_batch_sizes[loss_name] = compute_minimum_batch_size(jacobian_sampled.jacobian)
+            self.optimal_batch_sizes[loss_name] = compute_minimum_batch_size(jacobian_sampled)
             print(f"Computed batch size for {loss_name}: {self.optimal_batch_sizes[loss_name]}")
 
-            trace = get_ntk(jacobian_sampled.jacobian, compute='trace')
+            trace = get_ntk(jacobian_sampled, compute='trace')
             
-            return trace.item(), jacobian_sampled.batch_size
+            return trace, len(jacobian_sampled) 
 
         #Use computed optimal batch size every other time
         else:
@@ -233,9 +192,9 @@ class NTKWeightManager:
             jacobian_sampled = compute_jacobian(residual_sampled,self.networks.get_all_parameters(),self.device)
 
             # Compute NTK trace
-            trace = get_ntk(jacobian_sampled.jacobian, compute='trace')
+            trace = get_ntk(jacobian_sampled, compute='trace')
             
-            return trace.item(), jacobian_sampled.batch_size
+            return trace, len(jacobian_sampled)
         
     def extract_all_residuals(self) -> Dict[str, torch.Tensor]:
         """
@@ -371,9 +330,8 @@ class NTKWeightManager:
         Returns:
             Updated weights if computed, None otherwise
         """
-        if not (current_step >= self.config.start_step and
-                current_step % self.config.update_frequency == 0 and
-                current_step != self.last_update_step):
+        if not (current_step >= self.config.training.ntk_start_step and
+                current_step % self.config.training.ntk_update_freq == 0):
             return None
 
         self.last_update_step = current_step
@@ -403,16 +361,7 @@ def setup_ntk_weighting(
     Returns:
         Configured NTKWeightManager
     """
-    ntk_config = NTKConfig()
-
-    if config and 'training' in config and 'weight_strat' in config['training']:
-        if config['training']['weight_strat'] == "ntk":
-            training_cfg = config['training']
-            ntk_config.update_frequency = training_cfg.get('ntk_update_freq', 100)
-            ntk_config.start_step = training_cfg.get('ntk_start_step', 0)
-            ntk_config.trace_estimation_samples = training_cfg.get('ntk_samples', 256)
-
-    return NTKWeightManager(networks, physics, sampler, ntk_config)
+    return NTKWeightManager(networks, physics, sampler, config)
 
 
 def create_loss_weights_from_config(config: Dict[str, Any]) -> Dict[str, float]:
@@ -425,8 +374,7 @@ def create_loss_weights_from_config(config: Dict[str, Any]) -> Dict[str, float]:
     Returns:
         Dictionary of loss weights
     """
-    weight_strategy = config.get('../training', {}).get('weight_strat', 'uniform')
-
+    weight_strategy = config.training.weight_strat
     if weight_strategy == 'None':
         return {
             'interior': 1.0,
@@ -434,13 +382,14 @@ def create_loss_weights_from_config(config: Dict[str, Any]) -> Dict[str, float]:
             'initial': 1.0,
             'film_physics': 1.0
         }
+    
     elif weight_strategy == 'batch_size':
         batch_config = config.get('batch_size', {})
         return {
-            'interior': 1.0 / batch_config.get('interior', 1),
-            'boundary': 1.0 / batch_config.get('BC', 1),
-            'initial': 1.0 / batch_config.get('IC', 1),
-            'film_physics': 1.0 / batch_config.get('L', 1)
+            'interior': 1.0 / batch_config.get('interior'),
+            'boundary': 1.0 / batch_config.get('BC'),
+            'initial': 1.0 / batch_config.get('IC'),
+            'film_physics': 1.0 / batch_config.get('L')
         }
     elif weight_strategy == 'ntk':
         # NTK weights will be computed dynamically during training
@@ -450,14 +399,4 @@ def create_loss_weights_from_config(config: Dict[str, Any]) -> Dict[str, float]:
             'initial': 1.0,
             'film_physics': 1.0
         }
-    else:
-        # Manual weights (should be specified in config)
-        manual_weights = config.get('../training', {}).get('manual_weights', {})
-        default_weights = {
-            'interior': 1.0,
-            'boundary': 1.0,
-            'initial': 1.0,
-            'film_physics': 1.0
-        }
-        default_weights.update(manual_weights)
-        return default_weights
+ 
