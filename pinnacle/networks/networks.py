@@ -152,13 +152,16 @@ class NetworkManager:
         if name not in self.networks:
             raise KeyError(f"Network '{name}' not found. Available: {list(self.networks.keys())}")
         return self.networks[name]
-
-    def get_all_parameters(self) -> List[torch.nn.Parameter]:
-        """Get parameters from all networks for optimization"""
-        params = []
-        for network in self.networks.values():
-            params+= list(network.parameters())
-        return params
+    
+    def get_all_parameters_ordered(self) -> List[torch.nn.Parameter]:
+            """Get parameters in same order as monolith"""
+            # Match monolith order: potential, CV, AV, h, L
+            ordered_names = ['potential', 'cv', 'av', 'h', 'film_thickness']
+            params = []
+            for name in ordered_names:
+                if name in self.networks:
+                    params.extend(list(self.networks[name].parameters()))
+            return params
 
     def state_dict(self) -> Dict[str, Any]:
         """Get state dict for all networks"""
