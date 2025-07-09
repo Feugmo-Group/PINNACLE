@@ -22,7 +22,7 @@ from weighting.weighting import (
     setup_ntk_weighting,
     create_loss_weights_from_config
 )
-
+torch.manual_seed(995) 
 
 class PINNTrainer:
     """

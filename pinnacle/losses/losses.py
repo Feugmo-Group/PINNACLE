@@ -9,7 +9,7 @@ raw residuals for NTK weight computation.
 
 import torch
 from typing import Dict, Tuple, Any, Union, Optional
-
+torch.manual_seed(995) 
 
 def compute_interior_loss(x: torch.Tensor, t: torch.Tensor, E: torch.Tensor,
                           networks, physics,
