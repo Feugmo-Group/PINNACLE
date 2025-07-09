@@ -264,6 +264,28 @@ class NTKWeightManager:
 
         ntk_traces = {}
         batch_sizes = {}
+        # ADD DEBUG HERE - This is the critical moment
+        print("\n🔍 DEBUG: Gradient Flow Analysis")
+        print("=" * 60)
+        
+        # Check film physics specifically
+        if 'film_physics' in all_residuals:
+            film_residual = all_residuals['film_physics']
+            print(f"Film physics residual shape: {film_residual.shape}")
+            print(f"Film physics residual norm: {film_residual.norm():.2e}")
+            
+            # Check which networks have gradients
+            print("\nChecking gradient flow for film physics:")
+            for net_name, network in self.networks.networks.items():
+                grads = torch.autograd.grad(
+                    film_residual.sum(), 
+                    network.parameters(),
+                    retain_graph=True, 
+                    allow_unused=True
+                )
+                has_grad = any(g is not None and g.abs().max() > 0 for g in grads)
+                grad_norm = sum(g.norm().item() for g in grads if g is not None)
+                print(f"  {net_name}: {'✓ HAS' if has_grad else '✗ NO'} gradients (norm: {grad_norm:.2e})")
 
         # Compute NTK trace for each component
         for component_name, residual in all_residuals.items():
