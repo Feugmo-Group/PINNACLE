@@ -6,7 +6,7 @@ This module provides the basic sampling functions needed for PINN training.
 """
 import torch
 from typing import Dict, Any, Tuple
-
+torch.manual_seed(995) 
 
 class CollocationSampler:
     """

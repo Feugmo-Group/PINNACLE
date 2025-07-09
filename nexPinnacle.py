@@ -58,6 +58,18 @@ class FFN(nn.Module):
         # Output layer
         self.output_layer = nn.Linear(self.layer_size, output_dim)
 
+        self.initialize_weights()
+
+
+    def initialize_weights(self):
+        nn.init.xavier_uniform_(self.input_layer.weight)
+        nn.init.zeros_(self.input_layer.bias)
+        for layer in self.hidden_layers:
+            nn.init.xavier_uniform_(layer.weight)
+            nn.init.zeros_(layer.bias)
+        nn.init.xavier_uniform_(self.output_layer.weight)
+        nn.init.zeros_(self.output_layer.bias)
+
     def forward(self, x):
         x = self.activation(self.input_layer(x))
 
@@ -973,7 +985,7 @@ class Nexpinnacle():
         weighted_losses = {
             'cv_pde': weights['cv_pde'] * cv_pde_loss,
             'av_pde': weights['av_pde'] * av_pde_loss, 
-            'h_pde': (1/10000)*weights['h_pde'] * h_pde_loss,
+            'h_pde': weights['h_pde'] * h_pde_loss,
             'poisson_pde': weights['poisson_pde'] * poisson_pde_loss,
             'L_physics': weights['L_physics'] * L_physics_loss,
             'boundary': weights['boundary'] * bc_loss,
@@ -1371,7 +1383,7 @@ class Nexpinnacle():
             plt.plot(E_np, j_np, 'b-', linewidth=2, label='Total Current')
             plt.plot(E_np, j_1_np, 'r-', linewidth=2, label='Current due to R1')
             plt.plot(E_np, j_2_np, 'g-', linewidth=2, label='Current due to R2')
-            plt.plot(E_np, j_3_np, 'orange-', linewidth=2, label='Current due to R3')
+            plt.plot(E_np, j_3_np, 'y-', linewidth=2, label='Current due to R3')
             plt.plot(E_np, j_tp_np, 'm-', linewidth=2, label='Current due to RTP')
             plt.xlabel('Applied Potential EL V')
             plt.ylabel('Current Density j: A/m^2')

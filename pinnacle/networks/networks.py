@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 import torch.onnx
 from typing import Dict, Any, Optional, List
-
+torch.manual_seed(995)  
 
 class Swish(nn.Module):
     """Swish activation function: x * sigmoid(x)"""
@@ -80,6 +80,7 @@ class FFN(nn.Module):
 
         self.activation = activation_map[activation]
 
+
         # Input layer
         self.input_layer = nn.Linear(input_dim, self.layer_size)
 
@@ -91,6 +92,19 @@ class FFN(nn.Module):
 
         # Output layer
         self.output_layer = nn.Linear(self.layer_size, output_dim)
+
+        self.initialize_weights()
+    
+    def initialize_weights(self):
+        nn.init.xavier_uniform_(self.input_layer.weight)
+        nn.init.zeros_(self.input_layer.bias)
+        for layer in self.hidden_layers:
+            nn.init.xavier_uniform_(layer.weight)
+            nn.init.zeros_(layer.bias)
+        nn.init.xavier_uniform_(self.output_layer.weight)
+        nn.init.zeros_(self.output_layer.bias)
+
+
 
     def forward(self, x):
         x = self.activation(self.input_layer(x))
@@ -153,7 +167,7 @@ class NetworkManager:
             raise KeyError(f"Network '{name}' not found. Available: {list(self.networks.keys())}")
         return self.networks[name]
     
-    def get_all_parameters_ordered(self) -> List[torch.nn.Parameter]:
+    def get_all_parameters(self) -> List[torch.nn.Parameter]:
             """Get parameters in same order as monolith"""
             # Match monolith order: potential, CV, AV, h, L
             ordered_names = ['potential', 'cv', 'av', 'h', 'film_thickness']
