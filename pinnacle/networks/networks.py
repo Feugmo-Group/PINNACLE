@@ -157,7 +157,7 @@ class NetworkManager:
         """Get parameters from all networks for optimization"""
         params = []
         for network in self.networks.values():
-            params.extend(list(network.parameters()))
+            params+= list(network.parameters())
         return params
 
     def state_dict(self) -> Dict[str, Any]:

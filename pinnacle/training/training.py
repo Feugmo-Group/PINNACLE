@@ -495,7 +495,7 @@ class PINNTrainer:
             "current_weights": self.ntk_manager.get_current_weights(),
             "optimal_batch_sizes": self.ntk_manager.optimal_batch_sizes,
             "last_update_step": self.ntk_manager.last_update_step,
-            "update_frequency": self.ntk_manager.config.update_frequency
+            "update_frequency": self.ntk_manager.config.training.ntk_update_freq
         }
 
     def get_training_stats(self) -> Dict[str, Any]:

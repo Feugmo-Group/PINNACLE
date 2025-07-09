@@ -68,7 +68,7 @@ class CollocationSampler:
         Returns:
             Tuple of (x, t, E) tensors for boundary points
         """
-        batch_size = self.batch_sizes['BC']
+        batch_size = 2*self.batch_sizes['BC']
 
         # Sample time and applied potential
         t = torch.rand(batch_size, 1, device=self.device, requires_grad=True)

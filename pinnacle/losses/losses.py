@@ -53,10 +53,10 @@ Tuple[torch.Tensor, Dict[str, torch.Tensor], Dict[str, torch.Tensor]]]:
 
     if return_residuals:
         residuals = {
-            'cv_pde': cv_residual.reshape(-1),
-            'av_pde': av_residual.reshape(-1),
-            'h_pde': h_residual.reshape(-1),
-            'poisson_pde': poisson_residual.reshape(-1)
+            'cv_pde': cv_residual,
+            'av_pde': av_residual,
+            'h_pde': h_residual,
+            'poisson_pde': poisson_residual
         }
         return total_interior_loss, individual_losses, residuals
     else:
@@ -225,9 +225,9 @@ Tuple[torch.Tensor, Dict[str, torch.Tensor], torch.Tensor]]:
     if return_residuals:
         # Combine all residuals into single tensor for NTK computation
         combined_residuals = torch.cat([
-            cv_mf_residual.reshape(-1), cv_fs_residual.reshape(-1),
-            av_mf_residual.reshape(-1), av_fs_residual.reshape(-1),
-            h_fs_residual.reshape(-1), u_mf_residual.reshape(-1), u_fs_residual.reshape(-1)
+            cv_mf_residual, cv_fs_residual,
+            av_mf_residual, av_fs_residual,
+            h_fs_residual, u_mf_residual, u_fs_residual
         ])
         return total_boundary_loss, individual_losses, combined_residuals
     else:
@@ -340,11 +340,11 @@ Tuple[torch.Tensor, Dict[str, torch.Tensor], torch.Tensor]]:
     if return_residuals:
         # Combine all residuals into single tensor for NTK computation
         combined_residuals = torch.cat([
-            L_initial_residual.reshape(-1),
-            cv_initial_residual.reshape(-1),
-            av_initial_residual.reshape(-1),
-            poisson_initial_residual.reshape(-1),
-            h_initial_residual.reshape(-1)
+            L_initial_residual,
+            cv_initial_residual,
+            av_initial_residual,
+            poisson_initial_residual,
+            h_initial_residual
         ])
         return total_initial_loss, individual_losses, combined_residuals
     else:
@@ -384,7 +384,7 @@ def compute_film_physics_loss(t: torch.Tensor, E: torch.Tensor,
 
     # Get rate constants
     k1, k2, k3, k4, k5, ktp, ko2 = physics.compute_rate_constants(t, E, networks)
-    #print(f"MODULAR - k2: {k2.mean().item():.6e}, k5: {k5:.6e}, (k2-k5): {(k2-k5).mean().item():.6e}")
+
     # Compute predicted and physics-based dL/dt
     dl_dt_pred = physics.grad_computer.compute_derivative(L_pred, t)
     dL_dt_physics = (1 / physics.scales.lc) * physics.scales.tc * physics.materials.Omega * (k2 - k5)
@@ -394,7 +394,7 @@ def compute_film_physics_loss(t: torch.Tensor, E: torch.Tensor,
     film_loss = torch.mean(film_residual ** 2)
 
     if return_residuals:
-        return film_loss, film_residual.reshape(-1)
+        return film_loss, film_residual
     else:
         return film_loss
 
@@ -486,9 +486,10 @@ Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor]]]:
         # Individual components with standard weighting
         weighted_cv_pde = weights['interior'] * interior_breakdown['cv_pde']
         weighted_av_pde = weights['interior'] * interior_breakdown['av_pde']
-        weighted_h_pde = weights['interior'] * interior_breakdown['h_pde']
+        weighted_h_pde = (1/1000)*weights['interior'] * interior_breakdown['h_pde']
         weighted_poisson_pde = weights['interior'] * interior_breakdown['poisson_pde']
 
+        weighted_interior = weights['interior']*(interior_loss - interior_breakdown['h_pde']) + weighted_h_pde
         boundary_weight = weights['boundary']
         initial_weight = weights['initial']
 
