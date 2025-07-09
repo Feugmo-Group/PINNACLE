@@ -1362,7 +1362,7 @@ class Nexpinnacle():
                 j1 = (8.0/3.0)*self.F*k1*cv_hat_mf*self.cc
                 j2 = (8.0/3.0)*self.F*k2
                 j3 = (1.0/3.0)*self.F*k3*av_hat_fs*self.cc
-                jtp = self.F*ktp*(self.c_H**9)*h_hat_fs*self.chc
+                jtp = self.F*ktp*(self.c_H**8)*h_hat_fs*self.chc
                 j_total = j1 +j2 + j3 + jtp
                 j["total"].append(j_total.item())
                 j["j1"].append(j1.item())
