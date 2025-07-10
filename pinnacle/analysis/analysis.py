@@ -20,6 +20,7 @@ from losses.losses import compute_total_loss
 from weighting.weighting import NTKWeightManager
 import matplotlib.gridspec as gridspec
 from tqdm import tqdm
+from scipy.stats import gaussian_kde
 
 def get_weights(networks: Dict[str,nn.Module]) -> list:
     """Extract parameters from all networks and concatenate into a big list"""
@@ -310,6 +311,16 @@ def plot_ntk_weight_densities(ntk_weight_manager:NTKWeightManager, save_path: Op
                       'boundary', 'initial', 'film_physics']
     colors = plt.cm.Set1(np.linspace(0, 1, len(component_names)))
 
+    for i, comp in enumerate(component_names):
+        if comp in distributions and len(distributions[comp]) > 1:
+            weights = np.array(distributions[comp])
+            kde = gaussian_kde(weights)
+            x_range = np.linspace(weights.min(), weights.max(), 100)
+            density = kde(x_range)
+            
+            plt.plot(x_range, density, color=colors[i], 
+                    linewidth=2, label=comp, alpha=0.8)
+
     plt.xlabel('NTK Weight Values')
     plt.ylabel('Density')
     plt.title('NTK Weight Distributions by Loss Component')
@@ -318,7 +329,7 @@ def plot_ntk_weight_densities(ntk_weight_manager:NTKWeightManager, save_path: Op
     plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
     
     # Set reasonable y-axis limits
-    plt.ylim(1e-4, 1e1)
+    plt.ylim(1e-4, 1e3)
     
     plt.tight_layout()
 

@@ -141,13 +141,13 @@ class PINNTrainer:
 
     def save_ntk_weights(self,updated_weights):
         """Store updated weights in list for plotting"""
-        self.ntk_manager.ntk_weight_distributions["cv_pde"].append(updated_weights['cv_pde'])
-        self.ntk_manager.ntk_weight_distributions["av_pde"].append(updated_weights['av_pde'])
-        self.ntk_manager.ntk_weight_distributions["h_pde"].append(updated_weights['h_pde'])
-        self.ntk_manager.ntk_weight_distributions["poisson_pde"].append(updated_weights['poisson_pde'])
-        self.ntk_manager.ntk_weight_distributions["boundary"].append(updated_weights['boundary'])
-        self.ntk_manager.ntk_weight_distributions["initial"].append(updated_weights['initial'])
-        self.ntk_manager.ntk_weight_distributions["film_physics"].append(updated_weights['film_physics'])
+        self.ntk_manager.ntk_weight_distributions["cv_pde"].append(updated_weights['cv_pde'].item())
+        self.ntk_manager.ntk_weight_distributions["av_pde"].append(updated_weights['av_pde'].item())
+        self.ntk_manager.ntk_weight_distributions["h_pde"].append(updated_weights['h_pde'].item())
+        self.ntk_manager.ntk_weight_distributions["poisson_pde"].append(updated_weights['poisson_pde'].item())
+        self.ntk_manager.ntk_weight_distributions["boundary"].append(updated_weights['boundary'].item())
+        self.ntk_manager.ntk_weight_distributions["initial"].append(updated_weights['initial'].item())
+        self.ntk_manager.ntk_weight_distributions["film_physics"].append(updated_weights['film_physics'].item())
 
         return
     def _create_optimizer(self) -> torch.optim.Optimizer:
