@@ -949,8 +949,7 @@ class Nexpinnacle():
         if self.cfg.training.weight_strat == "hybrid_ntk_batch":
             self.current_weighting_mode = "ntk"
         # Check if we need to switch phases
-            if self.current_step == self.ntk_steps and self.current_weighting_mode == 'ntk':
-                print(f"🔄 MONOLITH SWITCHING: NTK → Batch Size Weighting at step {self.current_step}")
+            if self.current_step >= self.ntk_steps and self.current_weighting_mode == 'ntk':
                 self.current_weighting_mode = 'batch_size'
         
             # Return weights based on current mode
@@ -960,7 +959,7 @@ class Nexpinnacle():
                 return {
                     'cv_pde': 1/self.cfg.batch_size.interior,
                     'av_pde': 1/self.cfg.batch_size.interior,
-                    'h_pde': (1/10**4)*1/self.cfg.batch_size.interior, 
+                    'h_pde': (1/10**10)*1/self.cfg.batch_size.interior, 
                     'poisson_pde': 1/self.cfg.batch_size.interior,
                     'L_physics': 1/self.cfg.batch_size.L,
                     'boundary': 1/self.cfg.batch_size.BC,

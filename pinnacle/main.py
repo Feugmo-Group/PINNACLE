@@ -17,6 +17,7 @@ from  physics.physics import  ElectrochemicalPhysics
 from sampling.sampling import CollocationSampler
 from training.training import PINNTrainer
 from analysis.analysis import analyze_training_results
+from analysis.analysis import create_loss_landscape
 
 
 def run_training(config: DictConfig, device: torch.device) -> PINNTrainer:
@@ -61,6 +62,7 @@ def run_analysis(trainer: PINNTrainer) -> None:
 
     # Generate all analysis plots
     analyze_training_results(trainer, save_dir=plots_dir)
+    create_loss_landscape(trainer.networks,trainer.physics,trainer.sampler,device=trainer.device,save_path=plots_dir)
 
     print(f"📊 Analysis complete! Plots saved to: {plots_dir}")
 

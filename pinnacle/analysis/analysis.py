@@ -7,10 +7,283 @@ Simple functional approach to generate plots and analyze PINN results.
 
 import torch
 import matplotlib.pyplot as plt
+import matplotlib as mpl
 import numpy as np
 from typing import Dict, Any, List, Optional, Tuple
 import os
+import torch.nn as nn
+from networks.networks import NetworkManager
+from physics.physics import ElectrochemicalPhysics  
+from sampling.sampling import CollocationSampler
+from losses.losses import compute_total_loss
+import matplotlib.gridspec as gridspec
+from tqdm import tqdm
 
+def get_weights(networks: Dict[str,nn.Module]) -> list:
+    """Extract parameters from all networks and concatenate into a big list"""
+    param_list = []
+    for key in networks.keys():
+        param_list.extend([p.data for p in networks[key].parameters()])
+    return param_list
+
+
+def get_all_parameters(networks: Dict[str,nn.Module]) -> list:
+    param_list = []
+    for key in networks.keys():
+        param_list.extend(networks[key].parameters())
+    return param_list
+
+def set_weights(networks: Dict[str,nn.Module], weights:Dict[str, Dict[str, torch.Tensor]],device:torch.device = None, directions:torch.Tensor=None, step:torch.Tensor=None):
+    """
+        Overwrite the network's weights with a specified list of tensors
+        or change weights along directions with a step size.
+    """
+    if directions is None:
+        # You cannot specify a step length without a direction.
+        for (p, w) in zip(get_all_parameters(networks), weights):
+            p.data.copy_(w.type(type(p.data),device=device))
+    else:
+        assert step is not None, 'If a direction is specified then step must be specified as well'
+
+        if len(directions) == 2:
+            dx = directions[0]
+            dy = directions[1]
+            changes = [d0*step[0] + d1*step[1] for (d0, d1) in zip(dx, dy)]
+        else:
+            changes = [d*step for d in directions[0]]
+
+        for (p, w, d) in zip(get_all_parameters(networks), weights, changes):
+            p.data = w.to(device=device, dtype=w.dtype) + torch.as_tensor(d, device=device, dtype=w.dtype)
+        
+
+def get_random_weights(weights:Dict[str, Dict[str, torch.Tensor]],device:torch.device = None ):
+    """
+        Produce a random direction that is a list of random Gaussian tensors
+        with the same shape as the network's weights, so one direction entry per weight.
+    """
+    return [torch.randn(w.size(),device=device) for w in weights]
+
+def get_diff_weights(weights:Dict[str, Dict[str, torch.Tensor]], weights2:Dict[str, Dict[str, torch.Tensor]]):
+    """ Produce a direction from 'weights' to 'weights2'."""
+    return [w2 - w for (w, w2) in zip(weights, weights2)]
+
+def normalize_direction(direction:torch.Tensor, weights, norm='filter'):
+    """
+        Rescale the direction so that it has similar norm as their corresponding
+        model in different levels.
+        Args:
+          direction: a variables of the random direction for one layer
+          weights: a variable of the original model for one layer
+          norm: normalization method, 'filter' | 'layer' | 'weight'
+    """
+    if norm == 'filter':
+        # Rescale the filters (weights in group) in 'direction' so that each
+        # filter has the same norm as its corresponding filter in 'weights'.
+        for d, w in zip(direction, weights):
+            d.mul_(w.norm()/(d.norm() + 1e-10))
+    elif norm == 'layer':
+        # Rescale the layer variables in the direction so that each layer has
+        # the same norm as the layer variables in weights.
+        direction.mul_(weights.norm()/direction.norm())
+    elif norm == 'weight':
+        # Rescale the entries in the direction so that each entry has the same
+        # scale as the corresponding weight.
+        direction.mul_(weights)
+    elif norm == 'dfilter':
+        # Rescale the entries in the direction so that each filter direction
+        # has the unit norm.
+        for d in direction:
+            d.div_(d.norm() + 1e-10)
+    elif norm == 'dlayer':
+        # Rescale the entries in the direction so that each layer direction has
+        # the unit norm.
+        direction.div_(direction.norm())
+
+
+def normalize_directions_for_weights(direction:torch.Tensor, weights:Dict[str, Dict[str, torch.Tensor]], norm='filter', ignore='biasbn'):
+    """
+        The normalization scales the direction entries according to the entries of weights.
+    """
+    assert(len(direction) == len(weights))
+    for d, w in zip(direction, weights):
+        if d.dim() <= 1:
+            if ignore == 'biasbn':
+                d.fill_(0) # ignore directions for weights with 1 dimension
+            else:
+                d.copy_(w) # keep directions for weights/bias that are only 1 per node
+        else:
+            normalize_direction(d, w, norm)
+            
+def ignore_biasbn(directions:torch.Tensor):
+    """ Set bias and bn parameters in directions to zero """
+    for d in directions:
+        if d.dim() <= 1:
+            d.fill_(0)
+
+             
+def create_random_direction(networks:Dict[str,nn.Module],device, ignore='biasbn', norm='filter'):
+    """
+        Setup a random (normalized) direction with the same dimension as
+        the weights or states.
+        Args:
+          net: the given trained model
+          dir_type: 'weights' or 'states', type of directions.
+          ignore: 'biasbn', ignore biases and BN parameters.
+          norm: direction normalization method, including
+                'filter" | 'layer' | 'weight' | 'dlayer' | 'dfilter'
+        Returns:
+          direction: a random direction with the same dimension as weights or states.
+    """
+
+
+    weights = get_weights(networks) # a list of parameters.
+    direction = get_random_weights(weights,device=device)
+    normalize_directions_for_weights(direction, weights, norm, ignore)
+
+    return direction
+
+
+def create_loss_landscape(networks:Dict[str,nn.Module], physics:ElectrochemicalPhysics , sampler:CollocationSampler, device:torch.device, save_path=None) -> Any:
+    """
+    Generate a 2D loss landscape visualization around the current trained model parameters.
+    
+    This function implements the "filter normalization" technique from Basir et al. (2023) to create
+    a 2D slice through the high-dimensional loss surface. The landscape shows how the total loss
+    changes when model parameters are perturbed along two random directions from the current
+    trained state.
+    
+    Mathematical Approach:
+    ----------------------
+    1. Extract current trained parameters θ* from all networks
+    2. Generate two random directions ζ and γ with filter normalization
+    3. Create 2D grid where each point (e₁, e₂) represents: θ* + e₁·ζ + e₂·γ
+    4. Compute total physics-informed loss at each grid point using fixed collocation points
+    5. Visualize the resulting loss surface as a contour plot
+    
+    The filter normalization ensures that perturbations are scaled appropriately relative to
+    the magnitude of trained weights in each network layer, preventing bias toward layers
+    with larger parameter scales.
+    
+    Parameters:
+    -----------
+    networks : NetworkManager
+        Trained neural networks (potential, cv, av, h, film_thickness networks)
+    physics : ElectrochemicalPhysics  
+        Physics module for PDE residual computation
+    sampler : CollocationSampler
+        Sampler for generating collocation points
+    save_path : str, optional
+        Path to save the resulting contour plot. If None, plot is displayed but not saved.
+    
+    Returns:
+    --------
+    landscape : np.ndarray, shape=(grid_size, grid_size)
+        2D array of loss values at each grid point
+    x_coords : np.ndarray
+        X-coordinates of the grid (perturbation steps along direction 1)  
+    y_coords : np.ndarray
+        Y-coordinates of the grid (perturbation steps along direction 2)
+        
+    References:
+    -----------
+    Basir, S. (2023). "Investigating and Mitigating Failure Modes in Physics-informed 
+    Neural Networks (PINNs)." Communications in Computational Physics.
+    
+    Li, H., Xu, Z., Taylor, G., Studer, C., & Goldstein, T. (2018). "Visualizing the 
+    loss landscape of neural nets." Advances in Neural Information Processing Systems.
+    """
+
+    num_of_points = 50 
+    xcoordinates = np.linspace(-1.0, 1.0, num=num_of_points) 
+    ycoordinates = np.linspace(-1.0, 1.0, num=num_of_points)
+    xcoord_mesh, ycoord_mesh = np.meshgrid(xcoordinates, ycoordinates)
+
+    weights = get_weights(networks)# Current trained parameters θ*
+    random_direction1 = create_random_direction(networks,device=device)  # Random direction ζ  
+    random_direction2 = create_random_direction(networks,device=device)  # Random direction γ
+    directions = [random_direction1, random_direction2]
+
+    x_interior,t_interior,E_interior  = sampler.sample_interior_points(networks)
+    x_boundary,t_boundary,E_boundary = sampler.sample_boundary_points(networks)
+    x_initial,t_initial,E_initial = sampler.sample_initial_points(networks)
+    t_film,E_film = sampler.sample_film_physics_points()
+
+    loss_list = np.zeros((num_of_points,num_of_points))
+
+    for row in tqdm(range(num_of_points)):
+        for col in range(num_of_points):
+            step_x = xcoord_mesh[row][col]  # How far along direction 1 
+            step_y = ycoord_mesh[row][col]  # How far along direction 2
+            step = [step_x, step_y]
+            
+            # Move parameters: θ* + step_x*ζ + step_y*γ
+            set_weights(networks, weights,device, directions, step)
+            
+            # Compute loss at this perturbed location
+            loss_dict = compute_total_loss(x_interior, t_interior, E_interior, 
+                                     x_boundary, t_boundary, E_boundary,
+                                     x_initial, t_initial, E_initial,
+                                     t_film, E_film, networks, physics)
+
+
+            with torch.no_grad():
+                loss_list[row][col] = loss_dict['total'].item()
+
+    cmap_list = ['jet','YlGnBu','coolwarm','rainbow','magma','plasma','inferno','Spectral','RdBu']
+    cm = plt.cm.get_cmap(cmap_list[6]).reversed()
+
+    gs = gridspec.GridSpec(1, 1)
+    gs.update(wspace=0.1)
+
+    fig = plt.figure(figsize=(5,5))
+    ax = plt.subplot(gs[0,0],projection='3d')
+    # Remove gray panes and axis grid
+    ax.xaxis.pane.fill = False
+    ax.xaxis.pane.set_edgecolor('white')
+    ax.yaxis.pane.fill = False
+    ax.yaxis.pane.set_edgecolor('white')
+    ax.zaxis.pane.fill = False
+    ax.zaxis.pane.set_edgecolor('white')
+    ax.grid(False)
+
+    # Remove z-axis
+    ax.zaxis.set_visible(False)
+
+    vmax = np.max(np.log(loss_list+1e-14))
+    vmin = np.min(np.log(loss_list+1e-14))
+    plot = ax.plot_surface(xcoord_mesh, 
+                        ycoord_mesh,
+                        np.log(loss_list+1e-14),
+                        cmap=cm,
+                        linewidth=0, 
+                        vmin=vmin,
+                        vmax=vmax)
+
+    cset = ax.contourf(xcoord_mesh, 
+                    ycoord_mesh,
+                    np.log(loss_list+1e-14),
+                    zdir='z', 
+                    offset=np.min(np.log(loss_list+1e-14)-0.2), 
+                    cmap=cm)
+
+    # Adjust plot view
+    ax.view_init(elev=25, azim=-45)
+    ax.dist=11
+    ticks = np.linspace(vmin, vmax, 4, endpoint=True)
+    cbar = fig.colorbar(plot, ax=ax, shrink=0.50,ticks=ticks,pad=0.02)
+    cbar.formatter.set_powerlimits((1, 1))
+
+    # Set tick marks
+    ax.xaxis.set_major_locator(mpl.ticker.MultipleLocator(1))
+    ax.yaxis.set_major_locator(mpl.ticker.MultipleLocator(1))
+
+    # Set axis labels
+    ax.set_xlabel(r"$\epsilon_1$");
+    ax.set_ylabel(r"$\epsilon_2$");
+    # Set z-limit
+    ax.set_zlim(vmin, vmax);
+
+    plt.savefig(f"{save_path}/loss_landscape", bbox_inches='tight', pad_inches=0.2)
 
 def visualize_predictions(networks, physics, step: str = "final", save_path: Optional[str] = None) -> None:
     """
@@ -405,14 +678,3 @@ def analyze_training_results(trainer, save_dir: Optional[str] = None) -> None:
         print(f"  Training time: {stats['training_time_minutes']:.1f} minutes")
 
     print("✅ Analysis complete!")
-
-
-# Convenience functions for quick analysis
-def quick_analysis(trainer) -> None:
-    """Quick analysis without saving plots."""
-    analyze_training_results(trainer, save_dir=None)
-
-
-def save_all_plots(trainer, output_dir: str) -> None:
-    """Save all analysis plots to specified directory."""
-    analyze_training_results(trainer, save_dir=output_dir)
