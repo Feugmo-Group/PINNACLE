@@ -321,7 +321,7 @@ class PINNTrainer:
                     phase = f"NTK Phase ({self.current_step}/{self.ntk_steps})"
                 else:
                     batch_step = self.current_step - self.ntk_steps
-                    phase = f"Batch Phase ({batch_step}/{self.batch_steps})"
+                    phase = f"Batch Phase ({batch_step}/{self.max_steps-self.ntk_steps})"
                     print(f"\n=== Step {self.current_step} - {phase} ===")
             else:
                 print(f"\n=== Step {self.current_step} ===")
