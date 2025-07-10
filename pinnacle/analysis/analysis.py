@@ -248,13 +248,24 @@ def generate_polarization_curve(networks, physics, t_hat_eval: float = 1.0, n_po
         # Convert to numpy for plotting
         E_np = E_hat_values.cpu().numpy()*physics.scales.phic
         j_np = np.array(j["total"])
+        j_1_np = np.array(j['j1'])
+        j_2_np = np.array(j['j2'])
+        j_3_np = np.array(j['j3'])
+        j_tp_np = np.array(j['jtp'])
+
 
         # Create polarization curve plot
         plt.figure(figsize=(10, 6))
         plt.plot(E_np, j_np, 'b-', linewidth=2, label='Total Current')
-        plt.xlabel('Applied Potential E')
-        plt.ylabel('Current Density j')
+        plt.plot(E_np, j_1_np, 'r-', linewidth=2, label='Current due to R1')
+        plt.plot(E_np, j_2_np, 'g-', linewidth=2, label='Current due to R2')
+        plt.plot(E_np, j_3_np, 'y-', linewidth=2, label='Current due to R3')
+        plt.plot(E_np, j_tp_np, 'm-', linewidth=2, label='Current due to RTP')
+        plt.xlabel('Applied Potential E/ V')
+        plt.ylabel('Current Density j: A/m^2')
         plt.title(f'Polarization Curve at t̂={t_hat_eval}')
+        plt.legend()
+        #TODO: Make the X-Axis plots finer. 
         plt.grid(True, alpha=0.3)
         plt.legend()
 

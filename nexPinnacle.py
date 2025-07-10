@@ -62,12 +62,12 @@ class FFN(nn.Module):
 
 
     def initialize_weights(self):
-        nn.init.xavier_uniform_(self.input_layer.weight)
+        nn.init.xavier_normal_(self.input_layer.weight)
         nn.init.zeros_(self.input_layer.bias)
         for layer in self.hidden_layers:
-            nn.init.xavier_uniform_(layer.weight)
+            nn.init.xavier_normal_(layer.weight)
             nn.init.zeros_(layer.bias)
-        nn.init.xavier_uniform_(self.output_layer.weight)
+        nn.init.xavier_normal_(self.output_layer.weight)
         nn.init.zeros_(self.output_layer.bias)
 
     def forward(self, x):
@@ -1385,7 +1385,7 @@ class Nexpinnacle():
             plt.plot(E_np, j_2_np, 'g-', linewidth=2, label='Current due to R2')
             plt.plot(E_np, j_3_np, 'y-', linewidth=2, label='Current due to R3')
             plt.plot(E_np, j_tp_np, 'm-', linewidth=2, label='Current due to RTP')
-            plt.xlabel('Applied Potential EL V')
+            plt.xlabel('Applied Potential E/ V')
             plt.ylabel('Current Density j: A/m^2')
             plt.title(f'Polarization Curve at t̂={t_hat_eval}')
             plt.legend()

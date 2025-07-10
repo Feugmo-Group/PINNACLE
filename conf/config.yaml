@@ -43,13 +43,14 @@ scheduler:
 
 # Training settings
 training:
-  max_steps: 12000
+  max_steps: 22000
   rec_results_freq: 100
   rec_inference_freq: 1000
   save_network_freq: 1000
-  weight_strat: "ntk"
+  weight_strat: "hybrid_ntk_batch"
   ntk_update_freq: 100
   ntk_start_step: 0
+  ntk_steps: 12000
   brdr:
     beta_c: 0.999        # Smoothing factor for residual moving average
     beta_w: 0.999        # Smoothing factor for weight updates  

@@ -20,7 +20,7 @@ from losses.losses import compute_total_loss
 from weighting.weighting import (
     NTKWeightManager,
     setup_ntk_weighting,
-    create_loss_weights_from_config
+    create_loss_weights
 )
 torch.manual_seed(995) 
 
@@ -97,7 +97,8 @@ class PINNTrainer:
         self.max_steps = config['training']['max_steps']
         self.print_freq = config['training']['rec_results_freq']
         self.save_freq = config['training']['save_network_freq']
-
+        self.current_weighting_mode = ""
+        self.ntk_steps = self.config.training.ntk_steps
         # Setup loss weighting strategy
         self._setup_loss_weighting()
 
@@ -123,11 +124,16 @@ class PINNTrainer:
                 self.config
             )
             # Start with uniform weights until first NTK update
-            self.loss_weights = create_loss_weights_from_config(self.config)
+            self.loss_weights = create_loss_weights(self.config)
             self.ntk_weights = None  # Will be set when NTK weights are computed
+        elif self.weighting_strategy == 'hybrid_ntk_batch':
+            self.ntk_steps = self.config['training']['ntk_steps']
+            self.current_weighting_mode = 'ntk'
+            self.ntk_manager = setup_ntk_weighting(self.networks, self.physics, self.sampler, self.config)
+            self.loss_weights = create_loss_weights(self.config)
         else:
             # Use static weighting strategy
-            self.loss_weights = create_loss_weights_from_config(self.config)
+            self.loss_weights = create_loss_weights(self.config)
             self.ntk_manager = None
             self.ntk_weights = None
 
@@ -195,12 +201,27 @@ class PINNTrainer:
 
     def _update_loss_weights(self):
         """Update loss weights using the configured strategy."""
-        if self.weighting_strategy == 'ntk' and self.ntk_manager is not None:
+        if self.weighting_strategy == 'ntk' or (self.weighting_strategy == "hybrid_ntk_batch" and self.current_step < self.ntk_steps) and self.ntk_manager is not None:
             # Update NTK weights if needed
             updated_weights = self.ntk_manager.update_weights(self.current_step)
             if updated_weights is not None:
                 # Store NTK weights for passing to compute_total_loss
                 self.ntk_weights = updated_weights
+        elif self.weighting_strategy == "hybrid_ntk_batch":
+            if self.current_step == self.ntk_steps:
+                print(f"🔄 SWITCHING: NTK → Batch Size Weighting at step {self.current_step}")
+                self.current_weighting_mode = 'batch_size'
+                self.ntk_weights = None  # Clear NTK weights
+                # Set batch size weights
+                batch_config = self.config.get('batch_size', {})
+                self.loss_weights = {
+                    'interior': 1.0 / batch_config.get('interior', 1),
+                    'boundary': 1.0 / batch_config.get('BC', 1), 
+                    'initial': 1.0 / batch_config.get('IC', 1),
+                    'film_physics': 1.0 / batch_config.get('L', 1)
+                }
+                print(f"📊 New batch size weights: {self.loss_weights}")
+                return 
         else:
             # Clear NTK weights if not using NTK strategy
             self.ntk_weights = None
@@ -295,12 +316,21 @@ class PINNTrainer:
         """Print detailed training progress including weight information."""
         if self.current_step % self.print_freq == 0:
             print(f"\n=== Step {self.current_step} ===")
+            if self.weighting_strategy == 'hybrid_ntk_batch':
+                if self.current_step < self.ntk_steps:
+                    phase = f"NTK Phase ({self.current_step}/{self.ntk_steps})"
+                else:
+                    batch_step = self.current_step - self.ntk_steps
+                    phase = f"Batch Phase ({batch_step}/{self.batch_steps})"
+                    print(f"\n=== Step {self.current_step} - {phase} ===")
+            else:
+                print(f"\n=== Step {self.current_step} ===")
             print(f"Total Loss: {loss_dict['total']:.6f}")
             print(f"Interior: {loss_dict['interior']:.6f} | Boundary: {loss_dict['boundary']:.6f} | "
                   f"Initial: {loss_dict['initial']:.6f} | Film Physics: {loss_dict['film_physics']:.6f}")
 
             # Show current weights
-            if self.weighting_strategy == 'ntk' and self.ntk_weights is not None:
+            if self.weighting_strategy == 'ntk' or self.weighting_strategy == "hybrid_ntk_batch" and self.ntk_weights is not None:
                 print(f"NTK weights: CV={self.ntk_weights.get('cv_pde', 1.0):.3f}, "
                       f"AV={self.ntk_weights.get('av_pde', 1.0):.3f}, "
                       f"H={self.ntk_weights.get('h_pde', 1.0):.3f}, "

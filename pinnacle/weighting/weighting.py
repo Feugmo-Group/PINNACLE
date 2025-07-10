@@ -364,7 +364,7 @@ def setup_ntk_weighting(
     return NTKWeightManager(networks, physics, sampler, config)
 
 
-def create_loss_weights_from_config(config: Dict[str, Any]) -> Dict[str, float]:
+def create_loss_weights(config: Dict[str, Any]) -> Dict[str, float]:
     """
     Create loss weights based on configuration.
 
@@ -391,7 +391,7 @@ def create_loss_weights_from_config(config: Dict[str, Any]) -> Dict[str, float]:
             'initial': 1.0 / batch_config.get('IC'),
             'film_physics': 1.0 / batch_config.get('L')
         }
-    elif weight_strategy == 'ntk':
+    elif weight_strategy == 'ntk' or weight_strategy == "hybrid_ntk":
         # NTK weights will be computed dynamically during training
         return {
             'interior': 1.0,
@@ -399,4 +399,3 @@ def create_loss_weights_from_config(config: Dict[str, Any]) -> Dict[str, float]:
             'initial': 1.0,
             'film_physics': 1.0
         }
- 

@@ -95,13 +95,14 @@ class FFN(nn.Module):
 
         self.initialize_weights()
     
+    #TODO: Make this configurable via config so we can benchmark diff initializations
     def initialize_weights(self):
-        nn.init.xavier_uniform_(self.input_layer.weight)
+        nn.init.xavier_normal_(self.input_layer.weight)
         nn.init.zeros_(self.input_layer.bias)
         for layer in self.hidden_layers:
-            nn.init.xavier_uniform_(layer.weight)
+            nn.init.xavier_normal_(layer.weight)
             nn.init.zeros_(layer.bias)
-        nn.init.xavier_uniform_(self.output_layer.weight)
+        nn.init.xavier_normal_(self.output_layer.weight)
         nn.init.zeros_(self.output_layer.bias)
 
 
