@@ -139,6 +139,17 @@ class PINNTrainer:
 
         print(f"📊 Initial loss weights: {self.loss_weights}")
 
+    def save_ntk_weights(self,updated_weights):
+        """Store updated weights in list for plotting"""
+        self.ntk_manager.ntk_weight_distributions["cv_pde"].append(updated_weights['cv_pde'])
+        self.ntk_manager.ntk_weight_distributions["av_pde"].append(updated_weights['av_pde'])
+        self.ntk_manager.ntk_weight_distributions["h_pde"].append(updated_weights['h_pde'])
+        self.ntk_manager.ntk_weight_distributions["poisson_pde"].append(updated_weights['poisson_pde'])
+        self.ntk_manager.ntk_weight_distributions["boundary"].append(updated_weights['boundary'])
+        self.ntk_manager.ntk_weight_distributions["initial"].append(updated_weights['initial'])
+        self.ntk_manager.ntk_weight_distributions["film_physics"].append(updated_weights['film_physics'])
+
+        return
     def _create_optimizer(self) -> torch.optim.Optimizer:
         """Create and configure the optimizer."""
         params = self.networks.get_all_parameters()
@@ -207,7 +218,8 @@ class PINNTrainer:
             if updated_weights is not None:
                 # Store NTK weights for passing to compute_total_loss
                 self.ntk_weights = updated_weights
-        elif self.weighting_strategy == "hybrid_ntk_batch":
+                self.save_ntk_weights(updated_weights)
+        elif self.weighting_strategy == "hybrid_ntk_batch" and self.current_step>= self.ntk_steps:
             if self.current_step == self.ntk_steps:
                 print(f"🔄 SWITCHING: NTK → Batch Size Weighting at step {self.current_step}")
                 self.current_weighting_mode = 'batch_size'

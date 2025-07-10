@@ -14,8 +14,10 @@ import os
 import torch.nn as nn
 from networks.networks import NetworkManager
 from physics.physics import ElectrochemicalPhysics  
+from training.training import PINNTrainer
 from sampling.sampling import CollocationSampler
 from losses.losses import compute_total_loss
+from weighting.weighting import NTKWeightManager
 import matplotlib.gridspec as gridspec
 from tqdm import tqdm
 
@@ -284,6 +286,45 @@ def create_loss_landscape(networks:Dict[str,nn.Module], physics:ElectrochemicalP
     ax.set_zlim(vmin, vmax);
 
     plt.savefig(f"{save_path}/loss_landscape", bbox_inches='tight', pad_inches=0.2)
+
+
+def plot_ntk_weight_densities(ntk_weight_manager:NTKWeightManager, save_path: Optional[str] = None) -> None:
+    """
+    Plot density distributions of NTK weights for each loss component.
+    
+    Creates a plot similar to Figure 3 in Basir et al. (2023) showing the 
+    distribution of NTK weight values assigned to each loss component during training.
+    
+    Args:
+        trainer: PINNTrainer instance with ntk_weight_distributions data
+        save_path: Optional path to save the plot
+    """
+    
+    distributions = ntk_weight_manager.ntk_weight_distributions
+
+    print("🔬 Generating NTK weight density plots...")
+
+    plt.figure(figsize=(10, 6))
+
+    component_names = ['cv_pde', 'av_pde', 'h_pde', 'poisson_pde', 
+                      'boundary', 'initial', 'film_physics']
+    colors = plt.cm.Set1(np.linspace(0, 1, len(component_names)))
+
+    plt.xlabel('NTK Weight Values')
+    plt.ylabel('Density')
+    plt.title('NTK Weight Distributions by Loss Component')
+    plt.yscale('log')
+    plt.grid(True, alpha=0.3)
+    plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+    
+    # Set reasonable y-axis limits
+    plt.ylim(1e-4, 1e1)
+    
+    plt.tight_layout()
+
+    plt.savefig(f"{save_path}/ntk_density_plots.png", dpi=300, bbox_inches='tight')
+
+
 
 def visualize_predictions(networks, physics, step: str = "final", save_path: Optional[str] = None) -> None:
     """
@@ -636,7 +677,7 @@ def plot_training_losses(loss_history: Dict[str, List[float]], save_path: Option
     plt.close()
 
 
-def analyze_training_results(trainer, save_dir: Optional[str] = None) -> None:
+def analyze_training_results(trainer:PINNTrainer, ntk_weight_manager:NTKWeightManager,save_dir: Optional[str] = None) -> None:
     """
     Complete analysis of training results.
 
@@ -666,6 +707,9 @@ def analyze_training_results(trainer, save_dir: Optional[str] = None) -> None:
 
     # Generate polarization curve
     generate_polarization_curve(trainer.networks, trainer.physics, save_path=polarization_plot_path)
+
+    #Plot ntk weight density plots
+    plot_ntk_weight_densities(ntk_weight_manager,save_path=save_dir)
 
     # Print training statistics
     stats = trainer.get_training_stats()

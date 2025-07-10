@@ -156,6 +156,16 @@ class NTKWeightManager:
         # Update tracking
         self.last_update_step = -1
 
+        self.ntk_weight_distributions = {
+            'cv_pde': [],
+            'av_pde': [], 
+            'h_pde': [],
+            'poisson_pde': [],
+            'boundary': [],
+            'initial': [],
+            'film_physics': []
+        }
+
     def compute_ntk_trace(
             self,
             loss_residuals: torch.Tensor,
