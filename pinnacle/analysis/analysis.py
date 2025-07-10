@@ -211,82 +211,83 @@ def create_loss_landscape(networks:Dict[str,nn.Module], physics:ElectrochemicalP
     x_initial,t_initial,E_initial = sampler.sample_initial_points(networks)
     t_film,E_film = sampler.sample_film_physics_points()
 
-    loss_list = np.zeros((num_of_points,num_of_points))
+    loss_components = [
+        'total', 'interior', 'boundary', 'initial', 'film_physics',
+        # Granular interior components
+        'weighted_cv_pde', 'weighted_av_pde', 'weighted_h_pde', 'weighted_poisson_pde',
+        # Granular boundary components
+        'weighted_cv_mf_bc', 'weighted_av_mf_bc', 'weighted_u_mf_bc', 
+        'weighted_cv_fs_bc', 'weighted_av_fs_bc', 'weighted_u_fs_bc', 'weighted_h_fs_bc',
+        # Granular initial components
+        'weighted_cv_ic', 'weighted_av_ic', 'weighted_poisson_ic', 'weighted_h_ic', 'weighted_L_ic'
+    ]
+    loss_landscapes = {comp: np.zeros((num_of_points,num_of_points)) for comp in loss_components}
 
     for row in tqdm(range(num_of_points)):
         for col in range(num_of_points):
-            step_x = xcoord_mesh[row][col]  # How far along direction 1 
-            step_y = ycoord_mesh[row][col]  # How far along direction 2
+            step_x = xcoord_mesh[row][col]
+            step_y = ycoord_mesh[row][col]
             step = [step_x, step_y]
             
-            # Move parameters: θ* + step_x*ζ + step_y*γ
-            set_weights(networks, weights,device, directions, step)
+            set_weights(networks, weights, device, directions, step)
             
-            # Compute loss at this perturbed location
             loss_dict = compute_total_loss(x_interior, t_interior, E_interior, 
                                      x_boundary, t_boundary, E_boundary,
                                      x_initial, t_initial, E_initial,
                                      t_film, E_film, networks, physics)
 
-
+            # Store each loss component
             with torch.no_grad():
-                loss_list[row][col] = loss_dict['total'].item()
+                for comp in loss_components:
+                    if comp in loss_dict:
+                        loss_landscapes[comp][row][col] = loss_dict[comp].item()
+
 
     cmap_list = ['jet','YlGnBu','coolwarm','rainbow','magma','plasma','inferno','Spectral','RdBu']
     cm = plt.cm.get_cmap(cmap_list[6]).reversed()
 
-    gs = gridspec.GridSpec(1, 1)
-    gs.update(wspace=0.1)
+    for comp_name, loss_list in loss_landscapes.items():
+        gs = gridspec.GridSpec(1, 1)
+        gs.update(wspace=0.1)
+        
+        fig = plt.figure(figsize=(5,5))
+        ax = plt.subplot(projection='3d')
+        
+        # Remove gray panes and axis grid
+        ax.xaxis.pane.fill = False
+        ax.xaxis.pane.set_edgecolor('white')
+        ax.yaxis.pane.fill = False
+        ax.yaxis.pane.set_edgecolor('white')
+        ax.zaxis.pane.fill = False
+        ax.zaxis.pane.set_edgecolor('white')
+        ax.grid(False)
+        ax.zaxis.set_visible(False)
 
-    fig = plt.figure(figsize=(5,5))
-    ax = plt.subplot(gs[0,0],projection='3d')
-    # Remove gray panes and axis grid
-    ax.xaxis.pane.fill = False
-    ax.xaxis.pane.set_edgecolor('white')
-    ax.yaxis.pane.fill = False
-    ax.yaxis.pane.set_edgecolor('white')
-    ax.zaxis.pane.fill = False
-    ax.zaxis.pane.set_edgecolor('white')
-    ax.grid(False)
+        vmax = np.max(np.log(loss_list+1e-14))
+        vmin = np.min(np.log(loss_list+1e-14))
+        
+        plot = ax.plot_surface(xcoord_mesh, ycoord_mesh, np.log(loss_list+1e-14),
+                            cmap=cm, linewidth=0, vmin=vmin, vmax=vmax)
 
-    # Remove z-axis
-    ax.zaxis.set_visible(False)
+        cset = ax.contourf(xcoord_mesh, ycoord_mesh, np.log(loss_list+1e-14),
+                        zdir='z', offset=np.min(np.log(loss_list+1e-14)-0.2), cmap=cm)
 
-    vmax = np.max(np.log(loss_list+1e-14))
-    vmin = np.min(np.log(loss_list+1e-14))
-    plot = ax.plot_surface(xcoord_mesh, 
-                        ycoord_mesh,
-                        np.log(loss_list+1e-14),
-                        cmap=cm,
-                        linewidth=0, 
-                        vmin=vmin,
-                        vmax=vmax)
+        ax.view_init(elev=25, azim=-45)
+        ax.dist=11
+        ticks = np.linspace(vmin, vmax, 4, endpoint=True)
+        cbar = fig.colorbar(plot, ax=ax, shrink=0.50,ticks=ticks,pad=0.02)
+        cbar.formatter.set_powerlimits((1, 1))
 
-    cset = ax.contourf(xcoord_mesh, 
-                    ycoord_mesh,
-                    np.log(loss_list+1e-14),
-                    zdir='z', 
-                    offset=np.min(np.log(loss_list+1e-14)-0.2), 
-                    cmap=cm)
+        ax.xaxis.set_major_locator(mpl.ticker.MultipleLocator(1))
+        ax.yaxis.set_major_locator(mpl.ticker.MultipleLocator(1))
+        ax.set_xlabel(r"$\epsilon_1$")
+        ax.set_ylabel(r"$\epsilon_2$")
+        ax.set_zlim(vmin, vmax)
+        ax.set_title(f'{comp_name.title()} Loss Landscape')
 
-    # Adjust plot view
-    ax.view_init(elev=25, azim=-45)
-    ax.dist=11
-    ticks = np.linspace(vmin, vmax, 4, endpoint=True)
-    cbar = fig.colorbar(plot, ax=ax, shrink=0.50,ticks=ticks,pad=0.02)
-    cbar.formatter.set_powerlimits((1, 1))
-
-    # Set tick marks
-    ax.xaxis.set_major_locator(mpl.ticker.MultipleLocator(1))
-    ax.yaxis.set_major_locator(mpl.ticker.MultipleLocator(1))
-
-    # Set axis labels
-    ax.set_xlabel(r"$\epsilon_1$");
-    ax.set_ylabel(r"$\epsilon_2$");
-    # Set z-limit
-    ax.set_zlim(vmin, vmax);
-
-    plt.savefig(f"{save_path}/loss_landscape", bbox_inches='tight', pad_inches=0.2)
+        if save_path:
+            plt.savefig(f"{save_path}/loss_landscape_{comp_name}", bbox_inches='tight', pad_inches=0.2)
+        plt.close()
 
 
 def plot_ntk_weight_densities(ntk_weight_manager:NTKWeightManager, save_path: Optional[str] = None) -> None:
@@ -329,7 +330,7 @@ def plot_ntk_weight_densities(ntk_weight_manager:NTKWeightManager, save_path: Op
     plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
     
     # Set reasonable y-axis limits
-    plt.ylim(1e-4, 1e3)
+    plt.ylim(1e-6, 1e3)
     
     plt.tight_layout()
 
