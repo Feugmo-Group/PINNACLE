@@ -198,7 +198,7 @@ class Nexpinnacle():
 
 
         self.ntk_batch_sizes = {}  # Store computed batch sizes
-
+        self.ntk_steps = self.cfg.training.ntk_steps
         self.current_step = 0
         
         #TODO: Add equation of residual 
@@ -945,7 +945,29 @@ class Nexpinnacle():
 
     def get_loss_weights(self,param = "ntk"):
         """Get appropriate weights based on weighting strategy"""
-        if self.cfg.training.weight_strat == "ntk" and self.current_step >= self.cfg.training.ntk_start_step:
+
+        if self.cfg.training.weight_strat == "hybrid_ntk_batch":
+            self.current_weighting_mode = "ntk"
+        # Check if we need to switch phases
+            if self.current_step == self.ntk_steps and self.current_weighting_mode == 'ntk':
+                print(f"🔄 MONOLITH SWITCHING: NTK → Batch Size Weighting at step {self.current_step}")
+                self.current_weighting_mode = 'batch_size'
+        
+            # Return weights based on current mode
+            if self.current_weighting_mode == 'ntk':
+                return self.ntk_weights.copy()
+            else:  # batch_size mode
+                return {
+                    'cv_pde': 1/self.cfg.batch_size.interior,
+                    'av_pde': 1/self.cfg.batch_size.interior,
+                    'h_pde': (1/10**4)*1/self.cfg.batch_size.interior, 
+                    'poisson_pde': 1/self.cfg.batch_size.interior,
+                    'L_physics': 1/self.cfg.batch_size.L,
+                    'boundary': 1/self.cfg.batch_size.BC,
+                    'initial': 1/self.cfg.batch_size.IC,
+                }
+        
+        elif self.cfg.training.weight_strat == "ntk" and self.current_step >= self.cfg.training.ntk_start_step:
             return self.ntk_weights.copy()
         elif self.cfg.training.weight_strat == "None":
             return {
@@ -1093,7 +1115,7 @@ class Nexpinnacle():
             self.current_step = step
 
             should_update = (
-            self.cfg.training.weight_strat == "ntk" and 
+            self.cfg.training.weight_strat == "ntk" or self.cfg.training.weight_strat == 'hybrid_ntk_batch' and 
             step >= self.cfg.training.ntk_start_step and 
             step % self.cfg.training.ntk_update_freq == 0
             )
@@ -1110,7 +1132,15 @@ class Nexpinnacle():
             
             # print progress with detailed breakdown
             if step % self.cfg.training.rec_results_freq == 0:
-                print(f"\n=== Step {step} ===")
+                phase_info = ""
+                if self.cfg.training.weight_strat == "hybrid_ntk_batch":
+                    if self.current_weighting_mode == 'ntk':
+                        phase_info = f" [NTK Phase {step}/{self.ntk_steps}]"
+                    else:
+                        batch_step = step - self.ntk_steps
+                        phase_info = f" [Batch Phase {batch_step}/{self.cfg.training.max_steps - self.ntk_steps}]"
+
+                print(f"\n=== Step {step}{phase_info} ===")
                 print(f"Total Loss: {loss_dict['total']:.6f}")
                 print(f"Interior: {loss_dict['interior']:.6f} | Boundary: {loss_dict['boundary']:.6f} | "
                     f"Initial: {loss_dict['initial']:.6f} | L_Physics: {loss_dict['L_physics']:.6f}")

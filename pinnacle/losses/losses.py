@@ -486,7 +486,7 @@ Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor]]]:
         # Individual components with standard weighting
         weighted_cv_pde = weights['interior'] * interior_breakdown['cv_pde']
         weighted_av_pde = weights['interior'] * interior_breakdown['av_pde']
-        weighted_h_pde = (1/1000)*weights['interior'] * interior_breakdown['h_pde']
+        weighted_h_pde = (1/10**4)*weights['interior'] * interior_breakdown['h_pde']
         weighted_poisson_pde = weights['interior'] * interior_breakdown['poisson_pde']
 
         weighted_interior = weights['interior']*(interior_loss - interior_breakdown['h_pde']) + weighted_h_pde
