@@ -47,7 +47,7 @@ def run_training(config: DictConfig, device: torch.device) -> PINNTrainer:
     return trainer
 
 
-def run_analysis(trainer: PINNTrainer) -> None:
+def run_analysis(trainer: PINNTrainer, ntk_weight_manager: NetworkManager) -> None:
     """
     Run complete analysis of training results.
 
@@ -61,7 +61,7 @@ def run_analysis(trainer: PINNTrainer) -> None:
     plots_dir = os.path.join(output_dir, "plots")
 
     # Generate all analysis plots
-    analyze_training_results(trainer, save_dir=plots_dir)
+    analyze_training_results(trainer, ntk_weight_manager, save_dir=plots_dir)
     create_loss_landscape(trainer.networks,trainer.physics,trainer.sampler,device=trainer.device,save_path=plots_dir)
 
     print(f"📊 Analysis complete! Plots saved to: {plots_dir}")
@@ -120,7 +120,7 @@ def main(cfg: DictConfig) -> None:
     trainer = run_training(cfg, device)
 
     # Step 2: Run analysis
-    run_analysis(trainer)
+    run_analysis(trainer,trainer.ntk_manager)
 
     # Step 3: Print final summary
     print("\n" + "=" * 60)

@@ -43,7 +43,7 @@ scheduler:
 
 # Training settings
 training:
-  max_steps: 12000
+  max_steps: 1000
   rec_results_freq: 100
   rec_inference_freq: 1000
   save_network_freq: 1000
