@@ -42,25 +42,27 @@ class AdaptiveCollocationSampler:
 
         # Adaptive set sizes for each component
         self.adaptive_sizes = {
-            'interior': config.adaptive.interior_points,      # e.g., 8000
-            'boundary': config.adaptive.boundary_points,      # e.g., 2000  
-            'initial': config.adaptive.initial_points,        # e.g., 1500
-            'film_physics': config.adaptive.film_points       # e.g., 1000
+            'interior': config.sampling.adaptive.interior_points,      # e.g., 8000
+            'boundary': config.sampling.adaptive.boundary_points,      # e.g., 2000  
+            'initial': config.sampling.adaptive.initial_points,        # e.g., 1500
+            'film_physics': config.sampling.adaptive.film_points       # e.g., 1000
         }
         
         # Base set sizes (larger pools to select from)
         self.base_set_sizes = {
-            'interior': config.adaptive.interior_base_size,   # e.g., 60000
-            'boundary': config.adaptive.boundary_base_size,   # e.g., 20000
-            'initial': config.adaptive.initial_base_size,     # e.g., 15000
-            'film_physics': config.adaptive.film_base_size    # e.g., 10000
+            'interior': config.sampling.adaptive.interior_base_size,   # e.g., 60000
+            'boundary': config.sampling.adaptive.boundary_base_size,   # e.g., 20000
+            'initial': config.sampling.adaptive.initial_base_size,     # e.g., 15000
+            'film_physics': config.sampling.adaptive.film_base_size    # e.g., 10000
         }
         
         # Fixed grids (time and potential)
-        self.t_base_grid = torch.linspace(0, 1, config.adaptive.t_base_points, device=device)
+        self.t_base_points = config.sampling.adaptive.t_base_points
+        self.E_base_points = config.sampling.adaptive.E_base_points
+        self.t_base_grid = torch.linspace(0, 1, config.sampling.adaptive.t_base_points, device=device)
         E_min = physics.geometry.E_min / physics.scales.phic
         E_max = physics.geometry.E_max / physics.scales.phic
-        self.E_base_grid = torch.linspace(E_min, E_max, config.adaptive.E_base_points, device=device)
+        self.E_base_grid = torch.linspace(E_min, E_max, config.sampling.adaptive.E_base_points, device=device)
         
         # Current adaptive sets
         self.adaptive_sets = {
@@ -178,7 +180,7 @@ class AdaptiveCollocationSampler:
         self.base_sets['interior'] = self._generate_interior_base_set(networks)
         self.base_sets['boundary'] = self._generate_boundary_base_set(networks)
         self.base_sets['initial'] = self._generate_initial_base_set(networks)
-        self.base_sets['film_physics'] = self._generate_film_base_set(networks)
+        self.base_sets['film_physics'] = self._generate_film_base_set()
         
         # Update tracking
         self.last_L_max = self.current_L_max
@@ -197,7 +199,7 @@ class AdaptiveCollocationSampler:
         
         # Create spatial grid based on current domain
         x_base = torch.linspace(0, self.current_L_max, 
-                            self.config.adaptive.x_base_points, device=self.device)
+                            self.config.sampling.adaptive.x_base_points, device=self.device)
         
         # Create meshgrid for interior domain
         X_mesh, T_mesh, E_mesh = torch.meshgrid(
@@ -205,7 +207,7 @@ class AdaptiveCollocationSampler:
         )
         
         # Filter valid points: x <= L(t,E)
-        return self._filter_interior_points(X_mesh, T_mesh, E_mesh, networks)
+        return self._filter_valid_points(X_mesh, T_mesh, E_mesh, networks)
 
     def _generate_boundary_base_set(self, networks:Dict[str,nn.Module]):
         """Generate base set for boundary condition residuals
@@ -379,7 +381,7 @@ class AdaptiveCollocationSampler:
             Dictionary of interior residuals
         """
         base_set = self.base_sets['interior']
-        batch_size = self.config.adaptive.residual_batch_size
+        batch_size = self.config.sampling.adaptive.residual_batch_size
         
         residuals = {'cv_pde': [], 'av_pde': [], 'h_pde': [], 'poisson_pde': []}
         
@@ -417,7 +419,7 @@ class AdaptiveCollocationSampler:
         """
         
         base_set = self.base_sets['boundary']
-        batch_size = self.config.adaptive.residual_batch_size
+        batch_size = self.config.sampling.adaptive.residual_batch_size
         
         all_residuals = []
         
@@ -450,7 +452,7 @@ class AdaptiveCollocationSampler:
         """
         
         base_set = self.base_sets['initial']
-        batch_size = self.config.adaptive.residual_batch_size
+        batch_size = self.config.sampling.adaptive.residual_batch_size
         
         all_residuals = []
         
@@ -483,7 +485,7 @@ class AdaptiveCollocationSampler:
         
         """
         base_set = self.base_sets['film_physics']
-        batch_size = self.config.adaptive.residual_batch_size
+        batch_size = self.config.sampling.adaptive.residual_batch_size
         
         all_residuals = []
         
@@ -566,13 +568,13 @@ class AdaptiveCollocationSampler:
     def update_adaptive_sampling(self, current_step, networks):
         """Main update method called from PINNTrainer"""
         
-        if (current_step % self.update_frequency != 0):
+        if (current_step % self.config.sampling.adaptive.adaptive_update_freq != 0):
             return
             
         print(f"\n=== Complete Adaptive Sampling Update (Step {current_step}) ===")
         
         # Check if base sets need regeneration
-        if self.should_update_base_sets(current_step, networks):
+        if self.should_update_base_set(current_step, networks):
             self.regenerate_all_base_sets(networks)
             self.last_update_step = current_step
         

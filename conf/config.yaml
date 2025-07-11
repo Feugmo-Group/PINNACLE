@@ -31,10 +31,10 @@ optimizer:
 
 # Learning rate scheduler
 scheduler:
-  type: "RLROP"
+  type: "None"
   tf_exponential_lr:
     decay_rate: 0.99
-    decay_steps: 10000
+    decay_steps: 12000
   RLROP:
     factor: 0.5
     patience: 1000
@@ -44,29 +44,43 @@ scheduler:
 
 #Sampling Settings
 sampling:
-  strat: "Adaptive"
-  
+  strat: "Uniform"
   adaptive:
-    base_set_size: 60000
-    active_set_size: 15000
-    x_base_points: 200
-    t_base_points: 100
-    E_base_points: 50
-    base_update_freq: 1000
+    adaptive_update_freq: 500
+    # Final adaptive set sizes (what gets used for training)
+    interior_points: 8000
+    boundary_points: 2000
+    initial_points: 1500
+    film_points: 1000
+    
+    # Base set sizes (pools to select from)
+    interior_base_size: 60000
+    boundary_base_size: 20000
+    initial_base_size: 15000
+    film_base_size: 10000
+    
+    # Grid resolution for base set generation
+    x_base_points: 20000
+    t_base_points: 10000
+    E_base_points: 5000
+    
+    # Update control
+    base_update_freq: 500
     L_growth_threshold: 0.2
-    residual_batch_size: 1000
     safety_factor: 1.2
-    adaptive_update_freq: 100
+    
+    # Computational settings
+    residual_batch_size: 1000
 # Training settings
 training:
   max_steps: 15000
   rec_results_freq: 100
   rec_inference_freq: 1000
   save_network_freq: 1000
-  weight_strat: "batch_size"
+  weight_strat: "hybrid_ntk_batch"
   ntk_update_freq: 100
   ntk_start_step: 0
-  ntk_steps: 500
+  ntk_steps: 7500
   brdr:
     beta_c: 0.999        # Smoothing factor for residual moving average
     beta_w: 0.999        # Smoothing factor for weight updates  

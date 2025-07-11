@@ -83,7 +83,7 @@ class PINNTrainer:
         self.checkpoints_dir = os.path.join(self.output_dir, "checkpoints")
         os.makedirs(self.checkpoints_dir, exist_ok=True)
 
-        if config.training.sampling.start == "Adaptive":
+        if config.sampling.strat == "Adaptive":
             self.sampler = AdaptiveCollocationSampler(config, self.physics, device)
             self.use_adaptive = True
         else:
@@ -196,8 +196,10 @@ class PINNTrainer:
                 gamma=scheduler_config['tf_exponential_lr']['decay_rate'],
                 last_epoch=scheduler_config['tf_exponential_lr']['decay_steps']
             )
-        else:
-            return None
+        elif scheduler_config['type'] == "None":
+            return optim.lr_scheduler.ConstantLR(
+                self.optimizer,1.0,self.config.training.max_steps,self.config.training.max_steps
+            )
 
     def sample_training_points(self) -> Tuple[torch.Tensor, ...]:
         """
@@ -314,7 +316,7 @@ class PINNTrainer:
 
          # Update adaptive sampling periodically
         if (self.use_adaptive and 
-            self.current_step % self.config.training.adaptive_update_freq == 0):
+            self.current_step % self.config.sampling.adaptive.adaptive_update_freq == 0):
             self.sampler.update_adaptive_sampling(self.current_step, self.networks)
 
         # Compute losses (includes weight updates)
