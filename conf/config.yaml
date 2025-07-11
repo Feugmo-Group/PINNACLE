@@ -41,13 +41,29 @@ scheduler:
     threshold: 1e-4
     min_lr: 1e-8
 
+
+#Sampling Settings
+sampling:
+  strat: "Adaptive"
+  
+  adaptive:
+    base_set_size: 60000
+    active_set_size: 15000
+    x_base_points: 200
+    t_base_points: 100
+    E_base_points: 50
+    base_update_freq: 1000
+    L_growth_threshold: 0.2
+    residual_batch_size: 1000
+    safety_factor: 1.2
+    adaptive_update_freq: 100
 # Training settings
 training:
-  max_steps: 1000
+  max_steps: 15000
   rec_results_freq: 100
   rec_inference_freq: 1000
   save_network_freq: 1000
-  weight_strat: "hybrid_ntk_batch"
+  weight_strat: "batch_size"
   ntk_update_freq: 100
   ntk_start_step: 0
   ntk_steps: 500
@@ -160,7 +176,7 @@ domain:
     L_initial: 1e-9 # Initial film thickness [m]
 
 experiment:
-  name: "base_reduced_ntk_loss_landscape"  # Give experiments meaningful names
+  name: "base_batch_adaptive_tests"  # Give experiments meaningful names
 
 # Hydra-specific settings with better logging
 hydra:

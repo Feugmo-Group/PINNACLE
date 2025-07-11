@@ -101,7 +101,26 @@ def compute_minimum_batch_size(jacobian):
     
     return min_batch_size
     
-
+"""
+class BRDRWeightManager:
+    def __init__(
+            self,
+            networks,  # NetworkManager instance
+            physics,  # ElectrochemicalPhysics instance
+            sampler,  # CollocationSampler instance
+            config: Optional[NTKConfig] = None
+    ):
+    
+    #Initialize variables for storage
+    #We need to compute all the residuals and store them
+    #Calculate effective smoothing factors
+    #Calculate the IRDR
+    # Apply weight update algoritihim and return dict in form that compute_total_loss accept
+    #Backpropogation happens here
+    # Update scale factor    
+    #"Correct the gradients??"
+    #Optimizer step
+""" 
 class NTKWeightManager:
     """
     Neural Tangent Kernel-based automatic loss weighting for modular PINNACLE.
