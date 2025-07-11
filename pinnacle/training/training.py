@@ -69,7 +69,6 @@ class PINNTrainer:
         print("📦 Initializing PINNACLE components...")
         self.networks = NetworkManager(config, device)
         self.physics = ElectrochemicalPhysics(config, device)
-        self.sampler = CollocationSampler(config, self.physics, device)
 
         # Setup optimization
         self.optimizer = self._create_optimizer()
@@ -84,15 +83,12 @@ class PINNTrainer:
         self.checkpoints_dir = os.path.join(self.output_dir, "checkpoints")
         os.makedirs(self.checkpoints_dir, exist_ok=True)
 
-
-        if config.sampling.strat == "Adaptive":
-            self.adaptive_sampler = AdaptiveCollocationSampler(
-                config, self.physics, device
-            )
+        if config.training.sampling.start == "Adaptive":
+            self.sampler = AdaptiveCollocationSampler(config, self.physics, device)
+            self.use_adaptive = True
         else:
-            self.adaptive_sampler = None
-
-
+            self.sampler = CollocationSampler(config, self.physics, device)
+            self.use_adaptive = False
 
         # Loss history tracking
         self.loss_history = {
@@ -223,23 +219,18 @@ class PINNTrainer:
                 x_initial, t_initial, E_initial,
                 t_film, E_film)
 
-        # Add adaptive points if available
-        elif self.adaptive_sampler is not None:
-            adaptive_points = self.adaptive_sampler.get_adaptive_points()
-            if adaptive_points is not None:
-                # Append adaptive points to interior points
-                x_adaptive = adaptive_points[:, 0:1].requires_grad_(True)
-                t_adaptive = adaptive_points[:, 1:2].requires_grad_(True)
-                E_adaptive = adaptive_points[:, 2:3]
-                
-                x_interior = torch.cat([x_interior, x_adaptive], dim=0)
-                t_interior = torch.cat([t_interior, t_adaptive], dim=0)
-                E_interior = torch.cat([E_interior, E_adaptive], dim=0)
-        
-            return (x_interior, t_interior, E_interior,
-                x_boundary, t_boundary, E_boundary,
-                x_initial, t_initial, E_initial,
-                t_film, E_film)
+        elif self.config.sampling.start == "Adaptive":
+            # Purely adaptive sampling - no regular sampling
+            adaptive_interior = self.sampler.get_interior_points()
+            adaptive_boundary = self.sampler.get_boundary_points()
+            adaptive_initial = self.sampler.get_initial_points()
+            adaptive_film = self.sampler.get_film_points()
+  
+            
+            return (adaptive_interior[0], adaptive_interior[1], adaptive_interior[2],
+                    adaptive_boundary[0], adaptive_boundary[1], adaptive_boundary[2],
+                    adaptive_initial[0], adaptive_initial[1], adaptive_initial[2],
+                    adaptive_film[0], adaptive_film[1])
 
     def _update_loss_weights(self):
         """Update loss weights using the configured strategy."""
@@ -321,11 +312,10 @@ class PINNTrainer:
         # Zero gradients
         self.optimizer.zero_grad()
 
-        if (self.adaptive_sampler is not None and 
-            self.current_step % self.config.sampling.adaptive.adaptive_update_freq == 0):
-            self.adaptive_sampler.update_adaptive_sampling(
-                self.current_step, self.networks
-            )
+         # Update adaptive sampling periodically
+        if (self.use_adaptive and 
+            self.current_step % self.config.training.adaptive_update_freq == 0):
+            self.sampler.update_adaptive_sampling(self.current_step, self.networks)
 
         # Compute losses (includes weight updates)
         loss_dict = self.compute_losses()
