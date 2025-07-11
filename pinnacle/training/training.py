@@ -16,6 +16,7 @@ import time
 from networks.networks import NetworkManager
 from physics.physics import ElectrochemicalPhysics
 from sampling.sampling import CollocationSampler
+from sampling.sampling import AdaptiveCollocationSampler
 from losses.losses import compute_total_loss
 from weighting.weighting import (
     NTKWeightManager,
@@ -82,6 +83,16 @@ class PINNTrainer:
         # Setup directories
         self.checkpoints_dir = os.path.join(self.output_dir, "checkpoints")
         os.makedirs(self.checkpoints_dir, exist_ok=True)
+
+
+        if config.sampling.strat == "Adaptive":
+            self.adaptive_sampler = AdaptiveCollocationSampler(
+                config, self.physics, device
+            )
+        else:
+            self.adaptive_sampler = None
+
+
 
         # Loss history tracking
         self.loss_history = {
@@ -200,12 +211,32 @@ class PINNTrainer:
             Tuple of all sampled points for loss computation
         """
         # Sample different types of points
-        x_interior, t_interior, E_interior = self.sampler.sample_interior_points(self.networks)
-        x_boundary, t_boundary, E_boundary = self.sampler.sample_boundary_points(self.networks)
-        x_initial, t_initial, E_initial = self.sampler.sample_initial_points(self.networks)
-        t_film, E_film = self.sampler.sample_film_physics_points()
 
-        return (x_interior, t_interior, E_interior,
+        if self.config.sampling.strat == "Uniform":
+            x_interior, t_interior, E_interior = self.sampler.sample_interior_points(self.networks)
+            x_boundary, t_boundary, E_boundary = self.sampler.sample_boundary_points(self.networks)
+            x_initial, t_initial, E_initial = self.sampler.sample_initial_points(self.networks)
+            t_film, E_film = self.sampler.sample_film_physics_points()
+
+            return (x_interior, t_interior, E_interior,
+                x_boundary, t_boundary, E_boundary,
+                x_initial, t_initial, E_initial,
+                t_film, E_film)
+
+        # Add adaptive points if available
+        elif self.adaptive_sampler is not None:
+            adaptive_points = self.adaptive_sampler.get_adaptive_points()
+            if adaptive_points is not None:
+                # Append adaptive points to interior points
+                x_adaptive = adaptive_points[:, 0:1].requires_grad_(True)
+                t_adaptive = adaptive_points[:, 1:2].requires_grad_(True)
+                E_adaptive = adaptive_points[:, 2:3]
+                
+                x_interior = torch.cat([x_interior, x_adaptive], dim=0)
+                t_interior = torch.cat([t_interior, t_adaptive], dim=0)
+                E_interior = torch.cat([E_interior, E_adaptive], dim=0)
+        
+            return (x_interior, t_interior, E_interior,
                 x_boundary, t_boundary, E_boundary,
                 x_initial, t_initial, E_initial,
                 t_film, E_film)
@@ -289,6 +320,12 @@ class PINNTrainer:
         """
         # Zero gradients
         self.optimizer.zero_grad()
+
+        if (self.adaptive_sampler is not None and 
+            self.current_step % self.config.sampling.adaptive.adaptive_update_freq == 0):
+            self.adaptive_sampler.update_adaptive_sampling(
+                self.current_step, self.networks
+            )
 
         # Compute losses (includes weight updates)
         loss_dict = self.compute_losses()
