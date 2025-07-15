@@ -7,8 +7,8 @@ This module provides the basic sampling functions needed for PINN training.
 import torch
 from typing import Dict, Any, Tuple
 from physics.physics import ElectrochemicalPhysics
-from losses.losses import compute_boundary_loss
-from losses.losses import compute_initial_loss
+from losses.losses import compute_boundary_residuals_for_adaptive
+from losses.losses import compute_initial_residuals_for_adaptive
 from losses.losses import compute_film_physics_loss
 import torch.nn as nn
 
@@ -181,7 +181,10 @@ class AdaptiveCollocationSampler:
         self.base_sets['boundary'] = self._generate_boundary_base_set(networks)
         self.base_sets['initial'] = self._generate_initial_base_set(networks)
         self.base_sets['film_physics'] = self._generate_film_base_set()
-        
+        print(f"  Interior base set size: {len(self.base_sets['interior'])}")
+        print(f"  Boundary base set size: {len(self.base_sets['boundary'])}")
+        print(f"initial base set size: {len(self.base_sets['initial'])}")
+        print(f"film_phyiscs base set size: {len(self.base_sets['film_physics'])}")
         # Update tracking
         self.last_L_max = self.current_L_max
         
@@ -340,10 +343,11 @@ class AdaptiveCollocationSampler:
                     dim=1,
                 )
                 valid_points.append(valid_batch_points)
-
+       
         # Concatenate all valid points
-        return torch.cat(valid_points, dim=0)
-    
+        filtered_tensor = torch.cat(valid_points, dim=0)
+        print(f"  Valid interior points after filtering: {len(filtered_tensor)} / {len(x_flat)}")
+        return filtered_tensor
     
     def compute_all_residuals(self, networks:Dict[str,nn.Module], physics:ElectrochemicalPhysics):
         """Compute residuals for all loss components
@@ -433,9 +437,10 @@ class AdaptiveCollocationSampler:
             E_batch = batch_points[:, 2:3]
             
             # Use existing boundary loss function with return_residuals=True
-            _, _, boundary_residuals = compute_boundary_loss(
-                x_batch, t_batch, E_batch, networks, physics, return_residuals=True
+            boundary_residuals = compute_boundary_residuals_for_adaptive(
+                x_batch, t_batch, E_batch, networks, physics
             )
+            
             
             all_residuals.append(boundary_residuals.detach())
         
@@ -466,8 +471,8 @@ class AdaptiveCollocationSampler:
             E_batch = batch_points[:, 2:3]
             
             # Use existing initial loss function with return_residuals=True
-            _, _, initial_residuals = compute_initial_loss(
-                x_batch, t_batch, E_batch, networks, physics, return_residuals=True
+            initial_residuals = compute_initial_residuals_for_adaptive(
+                x_batch, t_batch, E_batch, networks, physics
             )
             
             all_residuals.append(initial_residuals.detach())
@@ -513,38 +518,56 @@ class AdaptiveCollocationSampler:
         Returns:
             None
         """
-        
-        # Interior points (combine all PDE residuals)
+        # Interior points
         interior_combined = (torch.abs(residuals['cv_pde']) + 
                             torch.abs(residuals['av_pde']) +
                             torch.abs(residuals['h_pde']) + 
-                            torch.abs(residuals['poisson_pde']))
+                            torch.abs(residuals['poisson_pde'])).flatten()
         
-        interior_indices = self._select_top_k_indices(
-            interior_combined, self.adaptive_sizes['interior']
-        )
+        if len(interior_combined) != len(self.base_sets['interior']):
+            print(f"ERROR: Interior mismatch - residuals:{len(interior_combined)} vs base:{len(self.base_sets['interior'])}")
+            return
+        
+        interior_indices = self._select_top_k_indices(interior_combined, self.adaptive_sizes['interior'])
+        if len(interior_indices) > 0 and torch.max(interior_indices).item() >= len(self.base_sets['interior']):
+            print(f"ERROR: Interior index {torch.max(interior_indices).item()} >= {len(self.base_sets['interior'])}")
+            return
         self.adaptive_sets['interior'] = self.base_sets['interior'][interior_indices].clone()
         
         # Boundary points
-        boundary_combined = torch.abs(residuals['boundary'])
-        boundary_indices = self._select_top_k_indices(
-            boundary_combined, self.adaptive_sizes['boundary']
-        )
+        boundary_combined = torch.abs(residuals['boundary']).flatten()
+        if len(boundary_combined) != len(self.base_sets['boundary']):
+            print(f"ERROR: Boundary mismatch - residuals:{len(boundary_combined)} vs base:{len(self.base_sets['boundary'])}")
+            return
+        boundary_indices = self._select_top_k_indices(boundary_combined, self.adaptive_sizes['boundary'])
+        if len(boundary_indices) > 0 and torch.max(boundary_indices).item() >= len(self.base_sets['boundary']):
+            print(f"ERROR: Boundary index out of bounds")
+            return
         self.adaptive_sets['boundary'] = self.base_sets['boundary'][boundary_indices].clone()
         
-        # Initial points
-        initial_combined = torch.abs(residuals['initial'])
-        initial_indices = self._select_top_k_indices(
-            initial_combined, self.adaptive_sizes['initial']
-        )
+        # Initial points  
+        initial_combined = torch.abs(residuals['initial']).flatten()
+        if len(initial_combined) != len(self.base_sets['initial']):
+            print(f"ERROR: Initial mismatch - residuals:{len(initial_combined)} vs base:{len(self.base_sets['initial'])}")
+            return
+        initial_indices = self._select_top_k_indices(initial_combined, self.adaptive_sizes['initial'])
+        if len(initial_indices) > 0 and torch.max(initial_indices).item() >= len(self.base_sets['initial']):
+            print(f"ERROR: Initial index out of bounds")
+            return
         self.adaptive_sets['initial'] = self.base_sets['initial'][initial_indices].clone()
         
         # Film physics points
-        film_combined = torch.abs(residuals['film_physics'])
-        film_indices = self._select_top_k_indices(
-            film_combined, self.adaptive_sizes['film_physics']
-        )
+        film_combined = torch.abs(residuals['film_physics']).flatten()
+        if len(film_combined) != len(self.base_sets['film_physics']):
+            print(f"ERROR: Film mismatch - residuals:{len(film_combined)} vs base:{len(self.base_sets['film_physics'])}")
+            return
+        film_indices = self._select_top_k_indices(film_combined, self.adaptive_sizes['film_physics'])
+        if len(film_indices) > 0 and torch.max(film_indices).item() >= len(self.base_sets['film_physics']):
+            print(f"ERROR: Film index out of bounds")
+            return
         self.adaptive_sets['film_physics'] = self.base_sets['film_physics'][film_indices].clone()
+        
+        print(f"Adaptive selection OK")
         
         print(f"Selected adaptive points:")
         for component, points in self.adaptive_sets.items():
@@ -558,7 +581,6 @@ class AdaptiveCollocationSampler:
         Returns:
             indices: List of indices to be sampled 
         """
-        
         if len(residuals) <= k:
             return torch.arange(len(residuals), device=self.device)
         else:
