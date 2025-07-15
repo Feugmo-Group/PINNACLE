@@ -232,6 +232,108 @@ Tuple[torch.Tensor, Dict[str, torch.Tensor], torch.Tensor]]:
         return total_boundary_loss, individual_losses, combined_residuals
     else:
         return total_boundary_loss, individual_losses
+    
+def compute_boundary_residuals_for_adaptive(x: torch.Tensor, t: torch.Tensor, E: torch.Tensor,
+                                           networks, physics) -> torch.Tensor:
+    """
+    Compute boundary residuals for adaptive sampling - one residual per point.
+    
+    Args:
+        x: Boundary spatial coordinates [batch_size, 1]
+        t: Time coordinates [batch_size, 1] 
+        E: Applied potential [batch_size, 1]
+        networks: NetworkManager instance
+        physics: ElectrochemicalPhysics instance
+    
+    Returns:
+        residuals: One representative residual per boundary point [batch_size]
+    """
+    batch_size = x.shape[0]
+    half_batch = batch_size // 2
+
+    # Split into metal/film and film/solution interfaces
+    x_mf = x[:half_batch]
+    x_fs = x[half_batch:]
+    t_mf = t[:half_batch]
+    t_fs = t[half_batch:]
+    E_mf = E[:half_batch]
+    E_fs = E[half_batch:]
+
+    # Get L derivative for m/f interface
+    L_input = torch.cat([t, E], dim=1)
+    L_pred = networks['film_thickness'](L_input)
+    L_pred_t = physics.grad_computer.compute_derivative(L_pred, t)
+    L_pred_t_mf = L_pred_t[:half_batch]
+
+    # === Metal/film interface residuals ===
+    inputs_mf = torch.cat([x_mf, t_mf, E_mf], dim=1)
+    u_pred_mf = networks['potential'](inputs_mf)
+    u_pred_mf_x = physics.grad_computer.compute_derivative(u_pred_mf, x_mf)
+
+    # Compute all m/f residuals
+    cv_pred_mf = networks['cv'](inputs_mf)
+    cv_pred_mf_x = physics.grad_computer.compute_derivative(cv_pred_mf, x_mf)
+    cv_mf_residual = ((-physics.transport.D_cv * physics.scales.cc / physics.scales.lc) * cv_pred_mf_x -
+                      physics.kinetics.k1_0 * torch.exp(
+                physics.kinetics.alpha_cv * physics.scales.phic * (E_mf / physics.scales.phic - u_pred_mf)) -
+                      (physics.transport.U_cv * physics.scales.phic / physics.scales.lc * u_pred_mf_x -
+                       physics.scales.lc / physics.scales.tc * L_pred_t_mf) * physics.scales.cc * cv_pred_mf)
+
+    av_pred_mf = networks['av'](inputs_mf)
+    av_pred_mf_x = physics.grad_computer.compute_derivative(av_pred_mf, x_mf)
+    av_mf_residual = ((-physics.transport.D_av * physics.scales.cc / physics.scales.lc) * av_pred_mf_x -
+                      (4 / 3) * physics.kinetics.k2_0 * torch.exp(
+                physics.kinetics.alpha_av * physics.scales.phic * (E_mf / physics.scales.phic - u_pred_mf)) -
+                      (physics.transport.U_av * physics.scales.phic / physics.scales.lc * u_pred_mf_x -
+                       physics.scales.lc / physics.scales.tc * L_pred_t_mf) * av_pred_mf)
+
+    u_mf_residual = ((physics.materials.eps_film * physics.scales.phic / physics.scales.lc * u_pred_mf_x) -
+                     physics.materials.eps_Ddl * physics.scales.phic * (
+                             u_pred_mf - E_mf / physics.scales.phic) / physics.geometry.d_Ddl)
+
+    # Combine m/f residuals (L2 norm per point)
+    mf_combined = torch.stack([cv_mf_residual.squeeze(), av_mf_residual.squeeze(), u_mf_residual.squeeze()], dim=1)
+    mf_residuals = torch.norm(mf_combined, dim=1)  # [half_batch]
+
+    # === Film/solution interface residuals ===
+    inputs_fs = torch.cat([x_fs, t_fs, E_fs], dim=1)
+    u_pred_fs = networks['potential'](inputs_fs)
+    u_pred_fs_x = physics.grad_computer.compute_derivative(u_pred_fs, x_fs)
+
+    # Compute all f/s residuals
+    cv_pred_fs = networks['cv'](inputs_fs)
+    cv_pred_fs_x = physics.grad_computer.compute_derivative(cv_pred_fs, x_fs)
+    cv_fs_residual = ((-physics.transport.D_cv * physics.scales.cc / physics.scales.lc) * cv_pred_fs_x -
+                      (physics.kinetics.k3_0 * torch.exp(physics.kinetics.beta_cv * physics.scales.phic * u_pred_fs) -
+                       physics.transport.U_cv * physics.scales.phic / physics.scales.lc * u_pred_fs_x) * cv_pred_fs * physics.scales.cc)
+
+    av_pred_fs = networks['av'](inputs_fs)
+    av_pred_fs_x = physics.grad_computer.compute_derivative(av_pred_fs, x_fs)
+    av_fs_residual = ((-physics.transport.D_av * physics.scales.cc / physics.scales.lc) * av_pred_fs_x -
+                      (physics.kinetics.k4_0 * torch.exp(physics.kinetics.alpha_av * u_pred_fs) -
+                       physics.transport.U_av * physics.scales.phic / physics.scales.lc * u_pred_fs_x) * av_pred_fs * physics.scales.cc)
+
+    u_fs_residual = ((physics.materials.eps_film * physics.scales.phic / physics.scales.lc * u_pred_fs_x) -
+                     (physics.materials.eps_Ddl * physics.scales.phic * u_pred_fs))
+
+    h_fs_pred = networks['h'](inputs_fs)
+    h_fs_pred_x = physics.grad_computer.compute_derivative(h_fs_pred, x_fs)
+    q = torch.where(h_fs_pred <= (1e-9) / physics.scales.chc,
+                    torch.zeros_like(h_fs_pred),
+                    -(physics.kinetics.ktp_0 + (physics.constants.F * physics.transport.D_h * physics.scales.phic) /
+                      (physics.constants.R * physics.constants.T * physics.scales.lc) * u_pred_fs_x))
+    h_fs_residual = ((physics.transport.D_h * physics.scales.chc / physics.scales.lc) * h_fs_pred_x -
+                     q * physics.scales.chc * h_fs_pred)
+
+    # Combine f/s residuals (L2 norm per point)
+    fs_combined = torch.stack([cv_fs_residual.squeeze(), av_fs_residual.squeeze(), 
+                              u_fs_residual.squeeze(), h_fs_residual.squeeze()], dim=1)
+    fs_residuals = torch.norm(fs_combined, dim=1)  # [half_batch]
+
+    # Concatenate m/f and f/s residuals
+    all_residuals = torch.cat([mf_residuals, fs_residuals], dim=0)  # [batch_size]
+    
+    return all_residuals
 
 
 def compute_initial_loss(x: torch.Tensor, t: torch.Tensor, E: torch.Tensor,
@@ -350,6 +452,55 @@ Tuple[torch.Tensor, Dict[str, torch.Tensor], torch.Tensor]]:
     else:
         return total_initial_loss, individual_losses
 
+def compute_initial_residuals_for_adaptive(x: torch.Tensor, t: torch.Tensor, E: torch.Tensor,
+                                         networks, physics) -> torch.Tensor:
+    """
+    Compute initial condition residuals for adaptive sampling - one residual per point.
+    
+    Returns:
+        residuals: One representative residual per initial point [batch_size]
+    """
+    # All inputs for networks
+    L_input = torch.cat([t, E], dim=1)
+    L_initial_pred = networks['film_thickness'](L_input)
+    inputs = torch.cat([x, t, E], dim=1)
+
+    # Compute all initial condition residuals
+    L_initial_residual = L_initial_pred - physics.domain.L_initial / physics.scales.lc
+
+    cv_initial_pred = networks['cv'](inputs)
+    cv_initial_t = physics.grad_computer.compute_derivative(cv_initial_pred, t)
+    cv_initial_residual = cv_initial_pred  # Just the concentration residual
+
+    av_initial_pred = networks['av'](inputs)
+    av_initial_t = physics.grad_computer.compute_derivative(av_initial_pred, t)
+    av_initial_residual = av_initial_pred  # Just the concentration residual
+
+    u_initial_pred = networks['potential'](inputs)
+    u_initial_t = physics.grad_computer.compute_derivative(u_initial_pred, t)
+    poisson_initial_residual = (u_initial_pred - (
+            (E / physics.scales.phic) - (1e7 * (physics.scales.lc / physics.scales.phic) * x)))
+
+    h_initial_pred = networks['h'](inputs)
+    h_initial_t = physics.grad_computer.compute_derivative(h_initial_pred, t)
+    h_initial_residual = (h_initial_pred - physics.scales.chc / physics.scales.chc)
+
+    # Combine all initial residuals using L2 norm per point
+    # Note: L_initial_residual is per-E value, broadcast to match spatial points
+    L_residual_expanded = L_initial_residual.expand_as(cv_initial_residual)
+    
+    combined_residuals = torch.stack([
+        cv_initial_residual.squeeze(),
+        av_initial_residual.squeeze(), 
+        poisson_initial_residual.squeeze(),
+        h_initial_residual.squeeze(),
+        L_residual_expanded.squeeze()
+    ], dim=1)
+    
+    # L2 norm across all initial conditions for each point
+    point_residuals = torch.norm(combined_residuals, dim=1)  # [batch_size]
+    
+    return point_residuals
 
 def compute_film_physics_loss(t: torch.Tensor, E: torch.Tensor,
                               networks, physics,

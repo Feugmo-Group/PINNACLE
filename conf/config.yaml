@@ -44,7 +44,7 @@ scheduler:
 
 #Sampling Settings
 sampling:
-  strat: "Uniform"
+  strat: "Adaptive"
   adaptive:
     adaptive_update_freq: 500
     # Final adaptive set sizes (what gets used for training)
@@ -55,14 +55,14 @@ sampling:
     
     # Base set sizes (pools to select from)
     interior_base_size: 60000
-    boundary_base_size: 20000
+    boundary_base_size: 70000
     initial_base_size: 15000
     film_base_size: 10000
     
     # Grid resolution for base set generation
-    x_base_points: 20000
-    t_base_points: 10000
-    E_base_points: 5000
+    x_base_points: 200
+    t_base_points: 100
+    E_base_points: 50
     
     # Update control
     base_update_freq: 500
@@ -77,7 +77,7 @@ training:
   rec_results_freq: 100
   rec_inference_freq: 1000
   save_network_freq: 1000
-  weight_strat: "hybrid_ntk_batch"
+  weight_strat: "batch_size"
   ntk_update_freq: 100
   ntk_start_step: 0
   ntk_steps: 7500

@@ -221,7 +221,7 @@ class PINNTrainer:
                 x_initial, t_initial, E_initial,
                 t_film, E_film)
 
-        elif self.config.sampling.start == "Adaptive":
+        elif self.config.sampling.strat == "Adaptive":
             # Purely adaptive sampling - no regular sampling
             adaptive_interior = self.sampler.get_interior_points()
             adaptive_boundary = self.sampler.get_boundary_points()
