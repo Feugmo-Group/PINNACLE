@@ -31,7 +31,7 @@ optimizer:
 
 # Learning rate scheduler
 scheduler:
-  type: "None"
+  type: "RLROP"
   tf_exponential_lr:
     decay_rate: 0.99
     decay_steps: 12000
@@ -44,9 +44,9 @@ scheduler:
 
 #Sampling Settings
 sampling:
-  strat: "Adaptive"
+  strat: "Uniform"
   adaptive:
-    adaptive_update_freq: 500
+    adaptive_update_freq: 100
     # Final adaptive set sizes (what gets used for training)
     interior_points: 8000
     boundary_points: 2000
@@ -65,9 +65,12 @@ sampling:
     E_base_points: 50
     
     # Update control
-    base_update_freq: 500
-    L_growth_threshold: 0.2
+    base_update_freq: 100
+    L_growth_threshold: 0.01
     safety_factor: 1.2
+
+    #Ratio of uniform to adaptive points
+    uniform_ratio: 0.6      # 60% uniform, 40% adaptive
     
     # Computational settings
     residual_batch_size: 1000
@@ -77,17 +80,16 @@ training:
   rec_results_freq: 100
   rec_inference_freq: 1000
   save_network_freq: 1000
-  weight_strat: "batch_size"
+  weight_strat: "AL"
   ntk_update_freq: 100
   ntk_start_step: 0
   ntk_steps: 7500
-  brdr:
-    beta_c: 0.999        # Smoothing factor for residual moving average
-    beta_w: 0.999        # Smoothing factor for weight updates  
-    beta_s: -1           # Will be set to (1 - lr) if -1
-    start_step: 1000     # When to start BRDR weighting
-    update_freq: 1       # Update every step (BRDR is cheap)
-
+# AL-PINNs specific parameters
+  al_beta: 100.0                    # Penalty parameter β
+  al_lr_lambda: 1e-3               # Learning rate for multipliers η_λ  
+  al_start_step: 0                 # When to start AL (usually immediate)
+  al_tolerance: 1e-6               # Target constraint satisfaction
+  al_lambda_max: 100.0             # Clipping bound for multipliers
 # Batch sizes for different constraints
 batch_size:
   BC: 1024 # Boundary points per boundary, modular version will require 2048 for 1024 at each boundary
@@ -102,6 +104,7 @@ pde:
     lc: 1e-9
     cc: 1e-5
   physics:  
+    include_holes: False
     # Physical constants
     F: 96485 # Faraday constant [C/mol]
     R: 8.3145 # Gas constant [J/(mol·K)]
@@ -190,7 +193,7 @@ domain:
     L_initial: 1e-9 # Initial film thickness [m]
 
 experiment:
-  name: "base_batch_adaptive_tests"  # Give experiments meaningful names
+  name: "base_augmented_lagrangian_tests"  # Give experiments meaningful names
 
 # Hydra-specific settings with better logging
 hydra:

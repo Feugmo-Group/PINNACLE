@@ -20,6 +20,8 @@ gradient flow pathologies in physics-informed neural networks.
 import torch
 from typing import Dict, List, Tuple, Optional, Callable, Any, NamedTuple
 from dataclasses import dataclass
+import torch.nn as nn
+from sampling.sampling import CollocationSampler
 torch.manual_seed(995) 
 
 @dataclass
@@ -370,7 +372,151 @@ class NTKWeightManager:
     def get_current_weights(self) -> Dict[str, float]:
             """Get the current weights (or uniform weights if none computed)."""
             return self.current_weights if self.current_weights else {}
+    
 
+
+@dataclass
+class ALConfig:
+    """Configuration for Augmented Lagrangian method"""
+    beta: float = 100.0                    # Penalty parameter β
+    lr_lambda: float = 1e-3                # Learning rate for multipliers
+    start_step: int = 0                    # When to start AL weighting
+    constraint_tolerance: float = 1e-6     # Target constraint satisfaction
+    lambda_max: float = 100.0              # Clipping bound for multipliers
+    update_frequency: int = 1              # How often to update multipliers
+
+
+class ALWeightManager:
+    """
+    Manages learnable Lagrange multipliers for AL-PINNs.
+    
+    Mathematical Framework:
+    - Maintains λ ∈ ℝ^m for m constraint equations
+    - Updates: λ ← λ + η_λ * C(θ)
+    - Computes: β‖C‖² + ⟨λ, C⟩
+    """
+    
+    def __init__(self, sampler, config: ALConfig, device: torch.device):
+        self.sampler = sampler
+        self.config = config
+        self.device = device
+        
+        # Will be initialized on first call
+        self.lambda_params = None
+        self.constraint_names = []
+        self.is_initialized = False
+        
+        # Tracking for analysis
+        self.constraint_history = {}
+        self.multiplier_history = {}
+
+
+    def _initialize_multipliers(self) -> Dict[str, nn.Parameter]:
+        """
+        Initialize learnable multipliers based on actual sampling dimensions.
+        
+        Args:
+            sample_dict: Dictionary containing sampled points for sizing
+            
+        Returns:
+            Dictionary of learnable λ parameters
+        """
+        self.lambda_params = {}
+
+        # Access batch sizes directly from sampler
+        batch_config = self.sampler.batch_sizes
+        
+        # Boundary constraint multipliers (7 types)
+        n_boundary = batch_config['BC']  # e.g., 100 points
+        boundary_types = ['cv_mf_bc', 'av_mf_bc', 'u_mf_bc', 
+                         'cv_fs_bc', 'av_fs_bc', 'u_fs_bc', 'h_fs_bc']
+        
+        for bc_type in boundary_types:
+            self.lambda_params[f'lambda_{bc_type}'] = nn.Parameter(
+                torch.zeros(n_boundary, device=self.device)
+            )
+            self.constraint_names.append(bc_type)
+        
+        # Initial condition multipliers (4 types)
+        n_initial = batch_config['IC']  # e.g., 50 points
+        initial_types = ['cv_ic', 'av_ic', 'h_ic', 'poisson_ic']
+        
+        for ic_type in initial_types:
+            self.lambda_params[f'lambda_{ic_type}'] = nn.Parameter(
+                torch.zeros(n_initial, device=self.device)
+            )
+            self.constraint_names.append(ic_type)
+        
+        # Film thickness multipliers (1 type)
+        n_film = batch_config['L']  # e.g., 25 points
+        self.lambda_params['lambda_L_ic'] = nn.Parameter(
+            torch.zeros(n_film, device=self.device)
+        )
+        self.constraint_names.append('L_ic')
+        
+        # Log initialization
+        total_params = sum(p.numel() for p in self.lambda_params.values())
+        print(f"🔗 AL-PINNs Multiplier Initialization:")
+        print(f"  Boundary: {len(boundary_types)} types × {n_boundary} points = {len(boundary_types) * n_boundary}")
+        print(f"  Initial: {len(initial_types)} types × {n_initial} points = {len(initial_types) * n_initial}")
+        print(f"  Film: 1 type × {n_film} points = {n_film}")
+        print(f"  📊 Total multiplier parameters: {total_params}")
+        
+        return 
+    
+    def get_multiplier_parameters(self) -> List[nn.Parameter]:
+        """Get all multiplier parameters for optimizer"""
+        if self.lambda_params is None:
+            return []
+        return list(self.lambda_params.values())
+    
+
+    def update_multipliers(self, constraint_violations: Dict[str, torch.Tensor]):
+        """
+        Update Lagrange multipliers: λ ← λ + η_λ * C(θ)
+        
+        Args:
+            constraint_violations: Dict of constraint violations by type
+        """
+        if not self.is_initialized:
+            return
+            
+        with torch.no_grad():
+            for constraint_name, violation in constraint_violations.items():
+                lambda_key = f'lambda_{constraint_name}'
+                
+                if lambda_key in self.lambda_params:
+                    # Standard AL update: λ ← λ + η_λ * C
+                    self.lambda_params[lambda_key] += self.config.lr_lambda * violation.detach()
+                    
+                    # Clip to prevent unbounded growth
+                    self.lambda_params[lambda_key].clamp_(-self.config.lambda_max, 
+                                                        self.config.lambda_max)
+                    
+    def get_constraint_satisfaction_metrics(self, constraint_violations: Dict[str, torch.Tensor]) -> Dict[str, float]:
+        """Compute constraint satisfaction metrics for monitoring"""
+        metrics = {}
+        
+        for name, violation in constraint_violations.items():
+            metrics[f'max_{name}'] = torch.max(torch.abs(violation)).item()
+            metrics[f'mean_{name}'] = torch.mean(torch.abs(violation)).item()
+            metrics[f'std_{name}'] = torch.std(violation).item()
+        
+        return metrics
+    
+    def log_multiplier_stats(self) -> Dict[str, float]:
+        """Log statistics about current multipliers"""
+        if not self.is_initialized:
+            return {}
+            
+        stats = {}
+        for name, param in self.lambda_params.items():
+            stats[f'{name}_mean'] = torch.mean(param).item()
+            stats[f'{name}_std'] = torch.std(param).item()
+            stats[f'{name}_max'] = torch.max(torch.abs(param)).item()
+        
+        return stats
+        
 # Convenience functions for easy integration with training.py
 def setup_ntk_weighting(
         networks,
