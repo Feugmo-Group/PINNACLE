@@ -38,7 +38,10 @@ Tuple[torch.Tensor, Dict[str, torch.Tensor], Dict[str, torch.Tensor]]]:
     # Calculate individual losses
     cv_pde_loss = torch.mean(cv_residual ** 2)
     av_pde_loss = torch.mean(av_residual ** 2)
-    h_pde_loss = torch.mean(h_residual ** 2)
+    if physics.config.pde.physics.include_holes:
+        h_pde_loss = torch.mean(h_residual ** 2)
+    else:
+        h_pde_loss = torch.mean(torch.zeros_like(h_residual))
     poisson_pde_loss = torch.mean(poisson_residual ** 2)
 
     # Total interior loss
@@ -207,10 +210,13 @@ Tuple[torch.Tensor, Dict[str, torch.Tensor], torch.Tensor]]:
                       (physics.constants.R * physics.constants.T * physics.scales.lc) * u_pred_fs_x))
     h_fs_residual = ((physics.transport.D_h * physics.scales.chc / physics.scales.lc) * h_fs_pred_x -
                      q * physics.scales.chc * h_fs_pred)
-    h_fs_loss = torch.mean(h_fs_residual ** 2)
+    if physics.config.pde.physics.include_holes:
+        h_fs_loss = torch.mean(h_fs_residual ** 2)
+    else:
+        h_fs_loss = torch.mean(torch.zeros_like(h_fs_residual))
 
     # Total boundary loss
-    total_boundary_loss = cv_mf_loss + av_mf_loss + u_mf_loss + cv_fs_loss + av_fs_loss + u_fs_loss + h_fs_loss
+    total_boundary_loss = cv_mf_loss + u_mf_loss + cv_fs_loss + av_fs_loss + u_fs_loss + h_fs_loss+ av_mf_loss 
 
     individual_losses = {
         'cv_mf_bc': cv_mf_loss,
@@ -224,12 +230,15 @@ Tuple[torch.Tensor, Dict[str, torch.Tensor], torch.Tensor]]:
 
     if return_residuals:
         # Combine all residuals into single tensor for NTK computation
+
+        residuals_dict = {'cv_mf_bc':cv_mf_residual, 'av_mf_bc':av_mf_residual, 'u_mf_bc':u_mf_residual, 
+                    'cv_fs_bc':cv_fs_residual, 'av_fs_bc':av_mf_residual, 'u_fs_bc':u_fs_residual, 'h_fs_bc':h_fs_residual}
         combined_residuals = torch.cat([
             cv_mf_residual, cv_fs_residual,
             av_mf_residual, av_fs_residual,
             h_fs_residual, u_mf_residual, u_fs_residual
         ])
-        return total_boundary_loss, individual_losses, combined_residuals
+        return total_boundary_loss, individual_losses, combined_residuals,residuals_dict
     else:
         return total_boundary_loss, individual_losses
     
@@ -426,7 +435,10 @@ Tuple[torch.Tensor, Dict[str, torch.Tensor], torch.Tensor]]:
     h_initial_pred = networks['h'](inputs)
     h_initial_t = physics.grad_computer.compute_derivative(h_initial_pred, t)
     h_initial_residual = (h_initial_pred - physics.scales.chc / physics.scales.chc) + h_initial_t
-    h_initial_loss = torch.mean((h_initial_pred - physics.scales.chc / physics.scales.chc)**2) + torch.mean(h_initial_t**2)
+    if physics.config.pde.physics.include_holes:
+        h_initial_loss = torch.mean((h_initial_pred - physics.scales.chc / physics.scales.chc)**2) + torch.mean(h_initial_t**2)
+    else:
+        h_initial_loss = torch.mean(torch.zeros_like((h_initial_pred - physics.scales.chc / physics.scales.chc))) + torch.mean(torch.zeros_like(h_initial_t))
 
     # Total initial loss
     total_initial_loss = cv_initial_loss + av_initial_loss + poisson_initial_loss + h_initial_loss + L_initial_loss
@@ -441,6 +453,8 @@ Tuple[torch.Tensor, Dict[str, torch.Tensor], torch.Tensor]]:
 
     if return_residuals:
         # Combine all residuals into single tensor for NTK computation
+
+        residual_dict = {'cv_ic':cv_initial_residual, 'av_ic':av_initial_residual, 'h_ic':h_initial_residual, 'poisson_ic':poisson_initial_residual, 'L_ic':L_initial_residual}
         combined_residuals = torch.cat([
             L_initial_residual,
             cv_initial_residual,
@@ -448,7 +462,7 @@ Tuple[torch.Tensor, Dict[str, torch.Tensor], torch.Tensor]]:
             poisson_initial_residual,
             h_initial_residual
         ])
-        return total_initial_loss, individual_losses, combined_residuals
+        return total_initial_loss, individual_losses, combined_residuals,residual_dict
     else:
         return total_initial_loss, individual_losses
 
@@ -460,6 +474,7 @@ def compute_initial_residuals_for_adaptive(x: torch.Tensor, t: torch.Tensor, E: 
     Returns:
         residuals: One representative residual per initial point [batch_size]
     """
+    #TODO: We are not considering intial time derrivatives and probably should be doing so
     # All inputs for networks
     L_input = torch.cat([t, E], dim=1)
     L_initial_pred = networks['film_thickness'](L_input)
@@ -582,10 +597,10 @@ Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor]]]:
         interior_loss, interior_breakdown, interior_residuals = compute_interior_loss(x_interior, t_interior,
                                                                                       E_interior, networks, physics,
                                                                                       return_residuals=True)
-        boundary_loss, boundary_breakdown, boundary_residuals = compute_boundary_loss(x_boundary, t_boundary,
+        boundary_loss, boundary_breakdown, boundary_residuals,_ = compute_boundary_loss(x_boundary, t_boundary,
                                                                                       E_boundary, networks, physics,
                                                                                       return_residuals=True)
-        initial_loss, initial_breakdown, initial_residuals = compute_initial_loss(x_initial, t_initial, E_initial,
+        initial_loss, initial_breakdown, initial_residuals,_ = compute_initial_loss(x_initial, t_initial, E_initial,
                                                                                   networks, physics,
                                                                                   return_residuals=True)
         film_loss, film_residuals = compute_film_physics_loss(t_film, E_film, networks, physics, return_residuals=True)
@@ -637,10 +652,10 @@ Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor]]]:
         # Individual components with standard weighting
         weighted_cv_pde = weights['interior'] * interior_breakdown['cv_pde']
         weighted_av_pde = weights['interior'] * interior_breakdown['av_pde']
-        weighted_h_pde = (1/10**10)*weights['interior'] * interior_breakdown['h_pde']
+        weighted_h_pde = weights['interior'] * interior_breakdown['h_pde']
         weighted_poisson_pde = weights['interior'] * interior_breakdown['poisson_pde']
 
-        weighted_interior = weights['interior']*(interior_loss - interior_breakdown['h_pde']) + weighted_h_pde
+        weighted_interior = weights['interior']*interior_loss 
         boundary_weight = weights['boundary']
         initial_weight = weights['initial']
 
@@ -672,3 +687,118 @@ Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor]]]:
         return all_losses, all_residuals
     else:
         return all_losses
+    
+def _extract_constraint_violations_al(loss_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+    """
+    Extract constraint violations from loss dictionary.
+    
+    Key insight: In PINNACLE, loss_i = ‖C_i‖₂, so no transformation needed.
+    """
+    violations = {}
+    
+    # Boundary constraints - direct extraction
+    boundary_constraints = ['cv_mf_bc', 'av_mf_bc', 'u_mf_bc', 
+                          'cv_fs_bc', 'av_fs_bc', 'u_fs_bc', 'h_fs_bc']
+    for bc_type in boundary_constraints:
+        loss_key = f'weighted_{bc_type}'
+        if loss_key in loss_dict:
+            # Direct assignment: loss is already ‖C‖₂
+            violations[bc_type] = loss_dict[loss_key]
+    
+    # Initial constraints - direct extraction  
+    initial_constraints = ['cv_ic', 'av_ic', 'h_ic', 'poisson_ic', 'L_ic']
+    for ic_type in initial_constraints:
+        loss_key = f'weighted_{ic_type}'
+        if loss_key in loss_dict:
+            violations[ic_type] = loss_dict[loss_key]
+    
+    return violations
+
+
+def _compute_al_terms(constraint_violations: Dict[str, torch.Tensor], 
+                     al_manager,
+                     residuals_dict: Optional[Dict] = None) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Compute Augmented Lagrangian penalty and Lagrangian terms.
+    
+    Returns:
+        penalty_term: β * Σᵢ ‖Cᵢ‖²₂
+        lagrangian_term: Σᵢ ⟨λᵢ, Cᵢ⟩
+    """
+    total_penalty = torch.tensor(0.0, device=al_manager.device)
+    total_lagrangian = torch.tensor(0.0, device=al_manager.device)
+    
+    for constraint_name, violation_norm in constraint_violations.items():
+        lambda_key = f'lambda_{constraint_name}'
+        
+        if lambda_key in al_manager.lambda_params:
+            # Penalty term: β‖C‖²₂ (square the norm)
+            penalty_contribution = al_manager.config.beta * (violation_norm ** 2)
+            total_penalty += penalty_contribution
+            
+            # Lagrangian term: ⟨λ, C⟩
+            # Note: violation_norm is ‖C‖₂, but we need C for inner product
+            if residuals_dict and constraint_name in residuals_dict:
+                # Use raw residuals for exact computation
+                raw_residual = residuals_dict[constraint_name]
+                lagrangian_contribution = torch.sum(
+                    al_manager.lambda_params[lambda_key] * raw_residual
+                )
+            else:
+                print("AHHH FUCKKKK AHHHHH HOTT!!!")
+                return
+            
+            total_lagrangian += lagrangian_contribution
+    
+    return total_penalty, total_lagrangian
+
+def compute_total_loss_al(x_interior, t_interior, E_interior,
+                         x_boundary, t_boundary, E_boundary,
+                         x_initial, t_initial, E_initial,
+                         t_film, E_film, networks, physics,
+                         al_manager,
+                         return_residuals=True):
+    """
+    Compute total loss using Augmented Lagrangian method.
+    
+    Mathematical Framework:
+    L_AL = L_PDE + β‖C‖² + ⟨λ, C⟩
+    
+    Where:
+    - L_PDE: Interior PDE residual loss (objective)
+    - C: Constraint violations (BC, IC, film)
+    - β: Penalty parameter
+    - λ: Learnable Lagrange multipliers
+    """
+    residuals_dict = {}
+    loss_dict, _ = compute_total_loss(
+            x_interior, t_interior, E_interior,
+            x_boundary, t_boundary, E_boundary,
+            x_initial, t_initial, E_initial,
+            t_film, E_film, networks, physics,
+            weights={'interior': 1.0, 'boundary': 0.0, 'initial': 0.0, 'film_physics': 0.0},
+            return_residuals=True
+        )
+    
+    #Construct detailed residuals_dict
+    _, _, _, boundary_dict = compute_boundary_loss(x_boundary,t_boundary,E_boundary,networks,physics,return_residuals=True)
+    _,_,_, iniital_dict = compute_initial_loss(x_initial,t_initial,E_initial,networks,physics,return_residuals=True)
+    residuals_dict = {**boundary_dict, **iniital_dict}
+
+    constraint_violations = _extract_constraint_violations_al(loss_dict)
+    penalty_term, lagrangian_term = _compute_al_terms(
+        constraint_violations, al_manager, residuals_dict
+    )
+
+    al_loss_dict = {
+        'total': loss_dict['interior'] + penalty_term + lagrangian_term,
+        'interior': loss_dict['interior'],
+        'penalty': penalty_term,
+        'lagrangian': lagrangian_term,
+    }
+
+    al_manager.update_multipliers(constraint_violations)
+
+    if return_residuals:
+        return al_loss_dict, residuals_dict
+    return al_loss_dict

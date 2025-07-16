@@ -265,7 +265,7 @@ def create_loss_landscape(networks:Dict[str,nn.Module], physics:ElectrochemicalP
 
         vmax = np.max(np.log(loss_list+1e-14))
         vmin = np.min(np.log(loss_list+1e-14))
-        
+
         plot = ax.plot_surface(xcoord_mesh, ycoord_mesh, np.log(loss_list+1e-14),
                             cmap=cm, linewidth=0, vmin=vmin, vmax=vmax)
 
@@ -688,6 +688,128 @@ def plot_training_losses(loss_history: Dict[str, List[float]], save_path: Option
 
     plt.close()
 
+def plot_al_constraint_evolution(trainer: PINNTrainer, save_path: str = None):
+    """Plot evolution of constraint violations during AL training"""
+    
+    if not trainer.use_al:
+        print("⚠️  Trainer not using AL weighting - skipping constraint plots")
+        return
+    
+    # Extract constraint satisfaction metrics from loss history
+    constraint_metrics = {}
+    for key, values in trainer.loss_history.items():
+        if key.startswith('max_') or key.startswith('mean_'):
+            constraint_metrics[key] = values
+    
+    if not constraint_metrics:
+        print("⚠️  No constraint metrics found in loss history")
+        return
+    
+    fig, axes = plt.subplots(2, 2, figsize=(15, 10))
+    
+    # Plot maximum constraint violations
+    axes[0, 0].set_title('Maximum Constraint Violations')
+    for key, values in constraint_metrics.items():
+        if key.startswith('max_'):
+            constraint_name = key.replace('max_', '')
+            axes[0, 0].semilogy(values, label=constraint_name, alpha=0.8)
+    axes[0, 0].set_xlabel('Training Step')
+    axes[0, 0].set_ylabel('Max |Violation|')
+    axes[0, 0].legend()
+    axes[0, 0].grid(True, alpha=0.3)
+    
+    # Plot mean constraint violations
+    axes[0, 1].set_title('Mean Constraint Violations')
+    for key, values in constraint_metrics.items():
+        if key.startswith('mean_'):
+            constraint_name = key.replace('mean_', '')
+            axes[0, 1].semilogy(values, label=constraint_name, alpha=0.8)
+    axes[0, 1].set_xlabel('Training Step')
+    axes[0, 1].set_ylabel('Mean |Violation|')
+    axes[0, 1].legend()
+    axes[0, 1].grid(True, alpha=0.3)
+    
+    # Plot penalty and Lagrangian terms
+    if trainer.al_metrics_history['penalty_term']:
+        axes[1, 0].semilogy(trainer.al_metrics_history['penalty_term'], 
+                           label='Penalty Term (β‖C‖²)', alpha=0.8)
+        axes[1, 0].semilogy(trainer.al_metrics_history['lagrangian_term'], 
+                           label='Lagrangian Term (⟨λ,C⟩)', alpha=0.8)
+        axes[1, 0].set_title('AL Terms Evolution')
+        axes[1, 0].set_xlabel('Training Step')
+        axes[1, 0].set_ylabel('Term Value')
+        axes[1, 0].legend()
+        axes[1, 0].grid(True, alpha=0.3)
+    
+    # Plot multiplier statistics
+    multiplier_stats = trainer.al_manager.log_multiplier_stats()
+    if multiplier_stats:
+        max_stats = {k: v for k, v in multiplier_stats.items() if k.endswith('_max')}
+        constraint_types = list(set(k.split('_max')[0] for k in max_stats.keys()))
+        
+        x_pos = np.arange(len(constraint_types))
+        max_values = [max_stats.get(f'{ct}_max', 0) for ct in constraint_types]
+        
+        axes[1, 1].bar(x_pos, max_values, alpha=0.7)
+        axes[1, 1].set_title('Current Max |λ| by Constraint Type')
+        axes[1, 1].set_xlabel('Constraint Type')
+        axes[1, 1].set_ylabel('Max |λ|')
+        axes[1, 1].set_xticks(x_pos)
+        axes[1, 1].set_xticklabels([ct.replace('lambda_', '') for ct in constraint_types], 
+                                  rotation=45)
+        axes[1, 1].grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    
+    if save_path:
+        plt.savefig(f"{save_path}/al_constraint_evolution.png", dpi=300, bbox_inches='tight')
+        print(f"  💾 Saved AL constraint evolution plots to {save_path}")
+    plt.close()
+
+def plot_al_multiplier_distributions(trainer: PINNTrainer, save_path: str = None):
+    """Plot distributions of current Lagrange multipliers"""
+    
+    if not trainer.use_al or not trainer.al_manager.is_initialized:
+        print("⚠️  AL not initialized - skipping multiplier distribution plots")
+        return
+    
+    # Get current multiplier values
+    multiplier_data = {}
+    for name, param in trainer.al_manager.lambda_params.items():
+        multiplier_data[name] = param.detach().cpu().numpy()
+    
+    # Create subplots
+    n_types = len(multiplier_data)
+    n_cols = 3
+    n_rows = (n_types + n_cols - 1) // n_cols
+    
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(15, 5*n_rows))
+    axes = axes.flatten() if n_rows > 1 else [axes] if n_rows == 1 else axes
+    
+    for i, (name, values) in enumerate(multiplier_data.items()):
+        if i < len(axes):
+            axes[i].hist(values, bins=30, alpha=0.7, density=True)
+            axes[i].set_title(f'{name.replace("lambda_", "")} Distribution')
+            axes[i].set_xlabel('λ Value')
+            axes[i].set_ylabel('Density')
+            axes[i].grid(True, alpha=0.3)
+            
+            # Add statistics text
+            stats_text = f'Mean: {np.mean(values):.3f}\nStd: {np.std(values):.3f}\nMax: {np.max(np.abs(values)):.3f}'
+            axes[i].text(0.05, 0.95, stats_text, transform=axes[i].transAxes, 
+                        verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+    
+    # Hide unused subplots
+    for i in range(len(multiplier_data), len(axes)):
+        axes[i].set_visible(False)
+    
+    plt.tight_layout()
+    
+    if save_path:
+        plt.savefig(f"{save_path}/al_multiplier_distributions.png", dpi=300, bbox_inches='tight')
+        print(f"  💾 Saved AL multiplier distribution plots to {save_path}")
+    plt.close()
+
 
 def analyze_training_results(trainer:PINNTrainer, ntk_weight_manager:NTKWeightManager,save_dir: Optional[str] = None) -> None:
     """
@@ -710,6 +832,20 @@ def analyze_training_results(trainer:PINNTrainer, ntk_weight_manager:NTKWeightMa
         loss_plot_path = None
         predictions_plot_path = None
         polarization_plot_path = None
+
+    # Weight-specific analysis
+    if trainer.use_al:
+        # AL-specific plots
+        plot_al_constraint_evolution(trainer, save_dir)
+        plot_al_multiplier_distributions(trainer, save_dir)
+        
+        # Print AL statistics
+        al_stats = trainer.get_al_training_stats()
+        print(f"\n🔗 AL-PINNs Training Summary:")
+        print(f"  Total multiplier parameters: {al_stats['total_multipliers']:,}")
+        print(f"  Final penalty term: {al_stats.get('final_penalty', 'N/A'):.6f}")
+        print(f"  Final Lagrangian term: {al_stats.get('final_lagrangian', 'N/A'):.6f}")
+        print(f"  Constraint types: {', '.join(al_stats['constraint_names'])}")
 
     # Plot training losses
     plot_training_losses(trainer.loss_history, save_path=loss_plot_path)

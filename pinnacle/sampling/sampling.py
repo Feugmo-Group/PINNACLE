@@ -36,6 +36,9 @@ class AdaptiveCollocationSampler:
         self.config = config
         self.physics = physics
         self.device = device
+        #Hybrid sampling ratios
+        self.uniform_ratio = config.sampling.adaptive.get('uniform_ratio', 0.6)  # Default 60% uniform
+        self.adaptive_ratio = 1.0 - self.uniform_ratio
 
         # Store batch sizes for easy access
         self.batch_sizes = config["batch_size"]
@@ -220,6 +223,7 @@ class AdaptiveCollocationSampler:
             torch.Tensor of boundary points
         
         """
+        #TODO: Should hafe one E-value for give (x,t) pair and need to fix this, is it even fixable? 
         # Sample time and potential
         n_sample = self.base_set_sizes['boundary']
         t_sample = torch.rand(n_sample, device=self.device)
@@ -528,7 +532,7 @@ class AdaptiveCollocationSampler:
             print(f"ERROR: Interior mismatch - residuals:{len(interior_combined)} vs base:{len(self.base_sets['interior'])}")
             return
         
-        interior_indices = self._select_top_k_indices(interior_combined, self.adaptive_sizes['interior'])
+        interior_indices = self._select_hybrid_points(interior_combined, self.adaptive_sizes['interior'])
         if len(interior_indices) > 0 and torch.max(interior_indices).item() >= len(self.base_sets['interior']):
             print(f"ERROR: Interior index {torch.max(interior_indices).item()} >= {len(self.base_sets['interior'])}")
             return
@@ -539,7 +543,7 @@ class AdaptiveCollocationSampler:
         if len(boundary_combined) != len(self.base_sets['boundary']):
             print(f"ERROR: Boundary mismatch - residuals:{len(boundary_combined)} vs base:{len(self.base_sets['boundary'])}")
             return
-        boundary_indices = self._select_top_k_indices(boundary_combined, self.adaptive_sizes['boundary'])
+        boundary_indices = self._select_hybrid_points(boundary_combined, self.adaptive_sizes['boundary'])
         if len(boundary_indices) > 0 and torch.max(boundary_indices).item() >= len(self.base_sets['boundary']):
             print(f"ERROR: Boundary index out of bounds")
             return
@@ -550,7 +554,7 @@ class AdaptiveCollocationSampler:
         if len(initial_combined) != len(self.base_sets['initial']):
             print(f"ERROR: Initial mismatch - residuals:{len(initial_combined)} vs base:{len(self.base_sets['initial'])}")
             return
-        initial_indices = self._select_top_k_indices(initial_combined, self.adaptive_sizes['initial'])
+        initial_indices = self._select_hybrid_points(initial_combined, self.adaptive_sizes['initial'])
         if len(initial_indices) > 0 and torch.max(initial_indices).item() >= len(self.base_sets['initial']):
             print(f"ERROR: Initial index out of bounds")
             return
@@ -561,7 +565,7 @@ class AdaptiveCollocationSampler:
         if len(film_combined) != len(self.base_sets['film_physics']):
             print(f"ERROR: Film mismatch - residuals:{len(film_combined)} vs base:{len(self.base_sets['film_physics'])}")
             return
-        film_indices = self._select_top_k_indices(film_combined, self.adaptive_sizes['film_physics'])
+        film_indices = self._select_hybrid_points(film_combined, self.adaptive_sizes['film_physics'])
         if len(film_indices) > 0 and torch.max(film_indices).item() >= len(self.base_sets['film_physics']):
             print(f"ERROR: Film index out of bounds")
             return
@@ -587,6 +591,40 @@ class AdaptiveCollocationSampler:
             _, indices = torch.topk(residuals, k=k, largest=True)
             return indices
         
+    def _select_hybrid_points(self, residuals:torch.Tensor, target_count:int) -> list[int]:
+        """
+        Select hybrid mix of uniform and adaptive points
+        
+        Args:
+            residuals: Residual magnitudes for all base points
+            target_count: Total number of points to select
+            
+        Returns:
+            indices: Selected point indices
+        """
+        total_available = len(residuals)
+
+        if total_available <= target_count:
+            # If we don't have enough points, return all
+            return torch.arange(total_available, device=self.device)
+        
+        #Calculate uniform to adaptive split
+        n_uniform = int(target_count * self.uniform_ratio)
+        n_adaptive = target_count - n_uniform
+
+        uniform_indices = torch.randperm(total_available, device=self.device)[:n_uniform]
+
+        if n_adaptive > 0:
+            _, adaptive_indices = torch.topk(residuals, k=n_adaptive, largest=True)
+            
+            # Combine indices
+            combined_indices = torch.cat([uniform_indices, adaptive_indices])
+        else:
+            combined_indices = uniform_indices
+        
+        return combined_indices
+
+
     def update_adaptive_sampling(self, current_step, networks):
         """Main update method called from PINNTrainer"""
         
