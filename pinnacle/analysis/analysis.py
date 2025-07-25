@@ -262,9 +262,22 @@ def create_loss_landscape(networks:Dict[str,nn.Module], physics:ElectrochemicalP
         ax.zaxis.pane.set_edgecolor('white')
         ax.grid(False)
         ax.zaxis.set_visible(False)
-
+        
+        # In create_loss_landscape, before setting zlim:
         vmax = np.max(np.log(loss_list+1e-14))
         vmin = np.min(np.log(loss_list+1e-14))
+
+        # Filter out infinite values
+        if np.isinf(vmax):
+            vmax = np.max(np.log(loss_list[np.isfinite(loss_list)]+1e-14))
+        if np.isinf(vmin):
+            vmin = np.min(np.log(loss_list[np.isfinite(loss_list)]+1e-14))
+
+        # Set reasonable bounds if still problematic
+        vmax = min(vmax, 50)  # Cap at reasonable value
+        vmin = max(vmin, -50)
+
+        ax.set_zlim(vmin, vmax)
 
         plot = ax.plot_surface(xcoord_mesh, ycoord_mesh, np.log(loss_list+1e-14),
                             cmap=cm, linewidth=0, vmin=vmin, vmax=vmax)
@@ -336,6 +349,117 @@ def plot_ntk_weight_densities(ntk_weight_manager:NTKWeightManager, save_path: Op
 
     plt.savefig(f"{save_path}/ntk_density_plots.png", dpi=300, bbox_inches='tight')
 
+def plot_top_k_worst(points_dict: Dict[str, torch.Tensor], 
+                     residuals_dict: Dict[str, torch.Tensor], 
+                     k: int = 1000, 
+                     save_path: Optional[str] = None) -> None:
+    """
+    Plot top k worst points (highest residuals) for any sampling method.
+    
+    Creates a 2D scatter plot showing the spatial-temporal distribution of the worst
+    performing collocation points, with different colors for different point types.
+    
+    Args:
+        points_dict: Dictionary containing point coordinates
+            - 'interior': (N, 3) tensor [x, t, E]
+            - 'boundary': (N, 3) tensor [x, t, E] 
+            - 'initial': (N, 3) tensor [x, t, E]
+            - 'film': (N, 2) tensor [t, E]
+        residuals_dict: Dictionary containing residual values
+            - 'cv_pde', 'av_pde', 'h_pde', 'poisson_pde': Interior residuals
+            - 'boundary': Boundary residuals
+            - 'initial': Initial condition residuals
+            - 'film_physics': Film physics residuals
+        k: Number of worst points to plot for each component
+        save_path: Optional path to save the plot
+    """
+    print(f"🎯 Plotting top {k} worst points...")
+    
+    fig, ax = plt.subplots(figsize=(12, 8))
+    
+    # Interior points - combine all PDE residuals
+    if 'interior' in points_dict and all(key in residuals_dict for key in ['cv_pde', 'av_pde', 'h_pde', 'poisson_pde']):
+        interior_combined = (torch.abs(residuals_dict['cv_pde']) + 
+                           torch.abs(residuals_dict['av_pde']) + 
+                           torch.abs(residuals_dict['h_pde']) + 
+                           torch.abs(residuals_dict['poisson_pde'])).flatten()
+        
+        if len(interior_combined) > 0:
+            k_interior = min(k, len(interior_combined))
+            _, worst_interior_idx = torch.topk(interior_combined, k=k_interior)
+            interior_worst = points_dict['interior'][worst_interior_idx]
+            
+            ax.scatter(interior_worst[:, 1].detach().cpu(), interior_worst[:, 0].detach().cpu(),  # t, x
+                      c='red', alpha=0.7, s=15, label=f'Interior (top {k_interior})', 
+                      marker='o')
+    
+    # Boundary points - combine all boundary condition residuals (same as interior approach)
+    if 'boundary' in points_dict and 'boundary' in residuals_dict:
+        boundary_residuals_dict = residuals_dict['boundary']
+        boundary_combined = (torch.abs(boundary_residuals_dict['cv_mf_bc']) + 
+                           torch.abs(boundary_residuals_dict['av_mf_bc']) + 
+                           torch.abs(boundary_residuals_dict['u_mf_bc']) + 
+                           torch.abs(boundary_residuals_dict['cv_fs_bc']) + 
+                           torch.abs(boundary_residuals_dict['av_fs_bc']) + 
+                           torch.abs(boundary_residuals_dict['u_fs_bc']) + 
+                           torch.abs(boundary_residuals_dict['h_fs_bc'])).flatten()
+        boundary_points = points_dict['boundary']
+        
+        if len(boundary_combined) > 0:
+            k_boundary = min(k, len(boundary_combined))
+            _, worst_boundary_idx = torch.topk(boundary_combined, k=k_boundary)
+            boundary_worst = boundary_points[worst_boundary_idx]
+            
+            ax.scatter(boundary_worst[:, 1].detach().cpu(), boundary_worst[:, 0].detach().cpu(),  # t, x
+                      c='blue', alpha=0.7, s=15, label=f'Boundary (top {k_boundary})', 
+                      marker='s')
+    
+    # Initial points
+    if 'initial' in points_dict and 'initial' in residuals_dict:
+        initial_residuals = residuals_dict['initial']
+        initial_combined = (torch.abs(initial_residuals['cv_ic']) +
+                            torch.abs(initial_residuals['av_ic']) + 
+                            torch.abs(initial_residuals['poisson_ic'])+
+                            torch.abs(initial_residuals['h_ic']) + 
+                            torch.abs(initial_residuals['L_ic'])).flatten()
+                            
+        if len(initial_residuals) > 0:
+            k_initial = min(k, len(initial_combined))
+            _, worst_initial_idx = torch.topk(initial_combined, k=k_initial)
+            initial_worst = points_dict['initial'][worst_initial_idx]
+            
+            ax.scatter(initial_worst[:, 1].detach().cpu(), initial_worst[:, 0].detach().cpu(),  # t, x
+                      c='green', alpha=0.7, s=15, label=f'Initial (top {k_initial})', 
+                      marker='^')
+    
+    # Film physics points (only have t, E - need to handle differently)
+    if 'film' in points_dict and 'film_physics' in residuals_dict:
+        film_residuals = torch.abs(residuals_dict['film_physics']).flatten()
+        if len(film_residuals) > 0:
+            k_film = min(k, len(film_residuals))
+            _, worst_film_idx = torch.topk(film_residuals, k=k_film)
+            film_worst = points_dict['film'][worst_film_idx]
+            
+            # Plot at x=0 (film interface) since film points don't have x coordinate
+            ax.scatter(film_worst[:, 0].detach().cpu(), torch.zeros_like(film_worst[:, 0]).detach().cpu(),  # t, x=0
+                      c='orange', alpha=0.7, s=15, label=f'Film Physics (top {k_film})', 
+                      marker='D')
+    
+    ax.set_xlabel('Time (t)')
+    ax.set_ylabel('Space (x)')
+    ax.set_title(f'Top {k} Worst Points by Component Type')
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    
+    # Save or show
+    if save_path:
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"  💾 Saved worst points plot to {save_path}")
+    else:
+        plt.show()
+    
+    plt.close()
 
 
 def visualize_predictions(networks, physics, step: str = "final", save_path: Optional[str] = None) -> None:
@@ -688,128 +812,41 @@ def plot_training_losses(loss_history: Dict[str, List[float]], save_path: Option
 
     plt.close()
 
-def plot_al_constraint_evolution(trainer: PINNTrainer, save_path: str = None):
-    """Plot evolution of constraint violations during AL training"""
-    
-    if not trainer.use_al:
-        print("⚠️  Trainer not using AL weighting - skipping constraint plots")
-        return
-    
-    # Extract constraint satisfaction metrics from loss history
-    constraint_metrics = {}
-    for key, values in trainer.loss_history.items():
-        if key.startswith('max_') or key.startswith('mean_'):
-            constraint_metrics[key] = values
-    
-    if not constraint_metrics:
-        print("⚠️  No constraint metrics found in loss history")
-        return
-    
-    fig, axes = plt.subplots(2, 2, figsize=(15, 10))
-    
-    # Plot maximum constraint violations
-    axes[0, 0].set_title('Maximum Constraint Violations')
-    for key, values in constraint_metrics.items():
-        if key.startswith('max_'):
-            constraint_name = key.replace('max_', '')
-            axes[0, 0].semilogy(values, label=constraint_name, alpha=0.8)
-    axes[0, 0].set_xlabel('Training Step')
-    axes[0, 0].set_ylabel('Max |Violation|')
-    axes[0, 0].legend()
-    axes[0, 0].grid(True, alpha=0.3)
-    
-    # Plot mean constraint violations
-    axes[0, 1].set_title('Mean Constraint Violations')
-    for key, values in constraint_metrics.items():
-        if key.startswith('mean_'):
-            constraint_name = key.replace('mean_', '')
-            axes[0, 1].semilogy(values, label=constraint_name, alpha=0.8)
-    axes[0, 1].set_xlabel('Training Step')
-    axes[0, 1].set_ylabel('Mean |Violation|')
-    axes[0, 1].legend()
-    axes[0, 1].grid(True, alpha=0.3)
-    
-    # Plot penalty and Lagrangian terms
-    if trainer.al_metrics_history['penalty_term']:
-        axes[1, 0].semilogy(trainer.al_metrics_history['penalty_term'], 
-                           label='Penalty Term (β‖C‖²)', alpha=0.8)
-        axes[1, 0].semilogy(trainer.al_metrics_history['lagrangian_term'], 
-                           label='Lagrangian Term (⟨λ,C⟩)', alpha=0.8)
-        axes[1, 0].set_title('AL Terms Evolution')
-        axes[1, 0].set_xlabel('Training Step')
-        axes[1, 0].set_ylabel('Term Value')
-        axes[1, 0].legend()
-        axes[1, 0].grid(True, alpha=0.3)
-    
-    # Plot multiplier statistics
-    multiplier_stats = trainer.al_manager.log_multiplier_stats()
-    if multiplier_stats:
-        max_stats = {k: v for k, v in multiplier_stats.items() if k.endswith('_max')}
-        constraint_types = list(set(k.split('_max')[0] for k in max_stats.keys()))
-        
-        x_pos = np.arange(len(constraint_types))
-        max_values = [max_stats.get(f'{ct}_max', 0) for ct in constraint_types]
-        
-        axes[1, 1].bar(x_pos, max_values, alpha=0.7)
-        axes[1, 1].set_title('Current Max |λ| by Constraint Type')
-        axes[1, 1].set_xlabel('Constraint Type')
-        axes[1, 1].set_ylabel('Max |λ|')
-        axes[1, 1].set_xticks(x_pos)
-        axes[1, 1].set_xticklabels([ct.replace('lambda_', '') for ct in constraint_types], 
-                                  rotation=45)
-        axes[1, 1].grid(True, alpha=0.3)
-    
-    plt.tight_layout()
-    
-    if save_path:
-        plt.savefig(f"{save_path}/al_constraint_evolution.png", dpi=300, bbox_inches='tight')
-        print(f"  💾 Saved AL constraint evolution plots to {save_path}")
-    plt.close()
-
 def plot_al_multiplier_distributions(trainer: PINNTrainer, save_path: str = None):
-    """Plot distributions of current Lagrange multipliers"""
-    
-    if not trainer.use_al or not trainer.al_manager.is_initialized:
-        print("⚠️  AL not initialized - skipping multiplier distribution plots")
-        return
-    
-    # Get current multiplier values
-    multiplier_data = {}
-    for name, param in trainer.al_manager.lambda_params.items():
-        multiplier_data[name] = param.detach().cpu().numpy()
-    
-    # Create subplots
-    n_types = len(multiplier_data)
-    n_cols = 3
-    n_rows = (n_types + n_cols - 1) // n_cols
-    
-    fig, axes = plt.subplots(n_rows, n_cols, figsize=(15, 5*n_rows))
-    axes = axes.flatten() if n_rows > 1 else [axes] if n_rows == 1 else axes
-    
-    for i, (name, values) in enumerate(multiplier_data.items()):
-        if i < len(axes):
-            axes[i].hist(values, bins=30, alpha=0.7, density=True)
-            axes[i].set_title(f'{name.replace("lambda_", "")} Distribution')
-            axes[i].set_xlabel('λ Value')
-            axes[i].set_ylabel('Density')
-            axes[i].grid(True, alpha=0.3)
-            
-            # Add statistics text
-            stats_text = f'Mean: {np.mean(values):.3f}\nStd: {np.std(values):.3f}\nMax: {np.max(np.abs(values)):.3f}'
-            axes[i].text(0.05, 0.95, stats_text, transform=axes[i].transAxes, 
-                        verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
-    
-    # Hide unused subplots
-    for i in range(len(multiplier_data), len(axes)):
-        axes[i].set_visible(False)
-    
-    plt.tight_layout()
-    
-    if save_path:
-        plt.savefig(f"{save_path}/al_multiplier_distributions.png", dpi=300, bbox_inches='tight')
-        print(f"  💾 Saved AL multiplier distribution plots to {save_path}")
-    plt.close()
+    """Plot evolution of total Lagrange multiplier L2 norm (like paper Figure 3 right)"""
 
+    if not trainer.use_al or not hasattr(trainer, 'total_multiplier_l2_history'):
+        print("⚠️ No total multiplier history found")
+        return
+
+    if len(trainer.total_multiplier_l2_history) == 0:
+        print("⚠️ Empty multiplier history")
+        return
+
+    fig, ax = plt.subplots(figsize=(8, 6))
+
+    # Create epoch array (every 10 steps)
+    epochs = [i * 10 for i in range(len(trainer.total_multiplier_l2_history))]
+
+    # Plot ||λ||₂ evolution  
+    ax.semilogy(epochs, trainer.total_multiplier_l2_history, 
+                label=f'β = {trainer.al_manager.config.beta}', 
+                linewidth=2, color='blue')
+
+    ax.set_xlabel('Training Step')
+    ax.set_ylabel('||λ||₂', fontsize=12)
+    ax.set_title('Evolution of Lagrange Multiplier L2 Norm')
+    ax.grid(True, alpha=0.3)
+    ax.legend()
+
+    # Set y-axis limits similar to paper (10⁻² to 10³)
+    ax.set_ylim(1e-2, 1e3)
+
+    plt.tight_layout()
+    if save_path:
+        plt.savefig(f"{save_path}/al_multiplier_l2_evolution.png", dpi=300, bbox_inches='tight')
+        print(f"💾 Saved AL multiplier L2 evolution to {save_path}")
+    plt.close()
 
 def analyze_training_results(trainer:PINNTrainer, ntk_weight_manager:NTKWeightManager,save_dir: Optional[str] = None) -> None:
     """
@@ -836,15 +873,14 @@ def analyze_training_results(trainer:PINNTrainer, ntk_weight_manager:NTKWeightMa
     # Weight-specific analysis
     if trainer.use_al:
         # AL-specific plots
-        plot_al_constraint_evolution(trainer, save_dir)
         plot_al_multiplier_distributions(trainer, save_dir)
         
         # Print AL statistics
         al_stats = trainer.get_al_training_stats()
         print(f"\n🔗 AL-PINNs Training Summary:")
-        print(f"  Total multiplier parameters: {al_stats['total_multipliers']:,}")
-        print(f"  Final penalty term: {al_stats.get('final_penalty', 'N/A'):.6f}")
-        print(f"  Final Lagrangian term: {al_stats.get('final_lagrangian', 'N/A'):.6f}")
+        print(f"  Total multiplier parameters: {al_stats['total_multipliers']}")
+        print(f"  Final penalty term: {al_stats.get('final_penalty', 'N/A')}")
+        print(f"  Final Lagrangian term: {al_stats.get('final_lagrangian', 'N/A')}")
         print(f"  Constraint types: {', '.join(al_stats['constraint_names'])}")
 
     # Plot training losses
@@ -857,7 +893,8 @@ def analyze_training_results(trainer:PINNTrainer, ntk_weight_manager:NTKWeightMa
     generate_polarization_curve(trainer.networks, trainer.physics, save_path=polarization_plot_path)
 
     #Plot ntk weight density plots
-    plot_ntk_weight_densities(ntk_weight_manager,save_path=save_dir)
+    if trainer.ntk_manager is not None:
+        plot_ntk_weight_densities(ntk_weight_manager,save_path=save_dir)
 
     # Print training statistics
     stats = trainer.get_training_stats()

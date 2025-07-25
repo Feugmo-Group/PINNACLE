@@ -105,8 +105,6 @@ class FFN(nn.Module):
         nn.init.xavier_normal_(self.output_layer.weight)
         nn.init.zeros_(self.output_layer.bias)
 
-
-
     def forward(self, x):
         x = self.activation(self.input_layer(x))
 
