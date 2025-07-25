@@ -34,7 +34,7 @@ scheduler:
   type: "RLROP"
   tf_exponential_lr:
     decay_rate: 0.99
-    decay_steps: 12000
+    decay_steps: 15000
   RLROP:
     factor: 0.5
     patience: 1000
@@ -76,17 +76,17 @@ sampling:
     residual_batch_size: 1000
 # Training settings
 training:
-  max_steps: 15000
+  max_steps: 20000
   rec_results_freq: 100
   rec_inference_freq: 1000
   save_network_freq: 1000
-  weight_strat: "AL"
+  weight_strat: "ntk"
   ntk_update_freq: 100
   ntk_start_step: 0
   ntk_steps: 7500
 # AL-PINNs specific parameters
-  al_beta: 100.0                    # Penalty parameter β
-  al_lr_lambda: 1e-3               # Learning rate for multipliers η_λ  
+  al_beta: 500.0                    # Penalty parameter β
+  al_lr_lambda: 1e-4              # Learning rate for multipliers η_λ  
   al_start_step: 0                 # When to start AL (usually immediate)
   al_tolerance: 1e-6               # Target constraint satisfaction
   al_lambda_max: 100.0             # Clipping bound for multipliers
@@ -193,7 +193,9 @@ domain:
     L_initial: 1e-9 # Initial film thickness [m]
 
 experiment:
-  name: "base_augmented_lagrangian_tests"  # Give experiments meaningful names
+  name: "base+reduced(sampling)+ntk+noscheduler"  # Give experiments meaningful names
+plotting:
+  topksteps: 1000
 
 # Hydra-specific settings with better logging
 hydra:

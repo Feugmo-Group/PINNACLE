@@ -19,6 +19,7 @@ from sampling.sampling import CollocationSampler
 from sampling.sampling import AdaptiveCollocationSampler
 from losses.losses import compute_total_loss
 from losses.losses import compute_total_loss_al
+from losses.losses import compute_interior_loss,compute_boundary_loss,compute_initial_loss,compute_film_physics_loss
 from weighting.weighting import (
     NTKWeightManager,
     setup_ntk_weighting,
@@ -26,6 +27,7 @@ from weighting.weighting import (
 )
 from weighting.weighting import ALConfig
 from weighting.weighting import ALWeightManager
+from losses.losses import _extract_constraint_violations_al
 torch.manual_seed(995) 
 
 class PINNTrainer:
@@ -67,14 +69,39 @@ class PINNTrainer:
         self.config = config
         self.device = device
         self.output_dir = output_dir or "outputs"
-
+        self.weighting_strategy = self.config.training.weight_strat 
+        self.al_config = ""
+        self.use_al = False
+        self.constraint_history = {}
         # Initialize core components
         print("📦 Initializing PINNACLE components...")
         self.networks = NetworkManager(config, device)
         self.physics = ElectrochemicalPhysics(config, device)
 
+        if config.sampling.strat == "Adaptive":
+            self.sampler = AdaptiveCollocationSampler(config, self.physics, device)
+            self.use_adaptive = True
+        else:
+            self.sampler = CollocationSampler(config, self.physics, device)
+            self.use_adaptive = False
+        # Setup loss weighting strategy
+        self._setup_loss_weighting()
         # Setup optimization
-        self.optimizer = self._create_optimizer()
+        if self.weighting_strategy == "AL":
+            # Create optimizer with parameter groups (like the paper)
+            network_params = self.networks.get_all_parameters()
+            multiplier_params = self.al_manager.get_multiplier_parameters()
+            optimizer_config = self.config['optimizer']['adam']
+            self.optimizer = optim.Adam([
+                {'params': network_params},  # θ with default lr
+                {'params': multiplier_params, 'lr': self.al_config.lr_lambda}  # λ with different lr
+            ], lr=optimizer_config["lr"],betas=optimizer_config['betas'],eps=optimizer_config['eps'])
+            for param_group in self.optimizer.param_groups:
+                if 'initial_lr' not in param_group:
+                    param_group['initial_lr'] = param_group['lr']
+        else:
+            # Standard optimizer
+            self.optimizer = self._create_optimizer()
         self.scheduler = self._create_scheduler()
 
         # Training state
@@ -86,13 +113,6 @@ class PINNTrainer:
         self.checkpoints_dir = os.path.join(self.output_dir, "checkpoints")
         os.makedirs(self.checkpoints_dir, exist_ok=True)
 
-        if config.sampling.strat == "Adaptive":
-            self.sampler = AdaptiveCollocationSampler(config, self.physics, device)
-            self.use_adaptive = True
-        else:
-            self.sampler = CollocationSampler(config, self.physics, device)
-            self.use_adaptive = False
-
         # Loss history tracking
         self.loss_history = {
             'total': [], 'interior': [], 'boundary': [], 'initial': [], 'film_physics': [],
@@ -103,18 +123,20 @@ class PINNTrainer:
             'weighted_cv_fs_bc': [], 'weighted_av_fs_bc': [], 'weighted_u_fs_bc': [], 'weighted_h_fs_bc': []
         }
 
+        if self.use_al:
+            self.total_multiplier_l2_history = []  # Track combined ||λ||₂ over time
         # Training configuration
         self.max_steps = config['training']['max_steps']
         self.print_freq = config['training']['rec_results_freq']
         self.save_freq = config['training']['save_network_freq']
         self.current_weighting_mode = ""
         self.ntk_steps = self.config.training.ntk_steps
-        # Setup loss weighting strategy
-        self._setup_loss_weighting()
+
 
         # Training statistics
         self.start_time = None
         self.total_params = sum(p.numel() for p in self.networks.get_all_parameters() if p.requires_grad)
+
 
         print(f"✅ Initialization complete!")
         print(f"📊 Total parameters: {self.total_params:,}")
@@ -122,7 +144,6 @@ class PINNTrainer:
 
     def _setup_loss_weighting(self):
         """Setup the loss weighting strategy based on configuration."""
-        self.weighting_strategy = self.config.training.weight_strat 
 
         if self.weighting_strategy == 'ntk':
             # Setup NTK weight manager
@@ -143,23 +164,23 @@ class PINNTrainer:
             self.loss_weights = create_loss_weights(self.config)
         elif self.weighting_strategy == "AL":
             print("🔗 Setting up Augmented Lagrangian loss weighting...")
-            al_config = ALConfig(
+            # Setup AL manager
+            self.al_config = ALConfig(
             beta=self.config.training.get('al_beta', 100.0),
             lr_lambda=self.config.training.get('al_lr_lambda', 1e-3),
             start_step=self.config.training.get('al_start_step', 0),
             constraint_tolerance=self.config.training.get('al_tolerance', 1e-6),
             lambda_max=self.config.training.get('al_lambda_max', 100.0)
             )
-            
-            self.al_manager = ALWeightManager(self.sampler, al_config, self.device)
+            self.al_manager = ALWeightManager(self.sampler, self.al_config, self.device)
             self.al_manager._initialize_multipliers()
             self.use_al = True
 
             self.loss_weights = {
             'interior': 1.0,  # PDE terms remain weighted normally
-            'boundary': 0.0,  # Boundary terms become constraints  
-            'initial': 0.0,   # Initial terms become constraints
-            'film_physics': 0.0  # Film terms become constraints
+            'boundary': 1.0,  # Boundary terms become constraints  
+            'initial': 1.0,   # Initial terms become constraints
+            'film_physics': 1.0  # Film terms become constraints
         }
             self.ntk_manager = None
             self.ntk_weights = None
@@ -176,15 +197,6 @@ class PINNTrainer:
 
         print(f"📊 Initial loss weights: {self.loss_weights}")
 
-    def _create_al_optimizer(self) -> torch.optim.Optimizer:
-        """Create optimizer for Lagrange multipliers"""
-        if not self.use_al:
-            return None
-            
-        return torch.optim.Adam(
-            self.al_manager.get_multiplier_parameters(),
-            lr=self.al_manager.config.lr_lambda
-        )
 
     def save_ntk_weights(self,updated_weights):
         """Store updated weights in list for plotting"""
@@ -319,7 +331,7 @@ class PINNTrainer:
          t_film, E_film) = self.sample_training_points()
 
         if self.use_al:
-            loss_dict, _ = compute_total_loss_al(
+            loss_dict, _, constraint_violations = compute_total_loss_al(
             x_interior, t_interior, E_interior,
             x_boundary, t_boundary, E_boundary,
             x_initial, t_initial, E_initial,
@@ -327,6 +339,17 @@ class PINNTrainer:
             self.networks, self.physics,
             self.al_manager
         )
+            # Store AL metrics for plotting
+            if 'penalty' in loss_dict:
+                self.al_metrics_history['penalty_term'].append(loss_dict['penalty'].item())
+            if 'lagrangian' in loss_dict:
+                self.al_metrics_history['lagrangian_term'].append(loss_dict['lagrangian'].item())
+
+            for name, violation in constraint_violations.items():
+                if name not in self.constraint_history:
+                    self.constraint_history[name] = []
+                self.constraint_history[name].append(violation.item())
+
         # Compute all losses with current weights
         elif self.ntk_weights is not None:
             # Use NTK weights (granular component weighting)
@@ -352,6 +375,52 @@ class PINNTrainer:
             )
 
         return loss_dict
+    
+    def _collect_current_points_and_residuals(self, networks):
+        """Collect current collocation points and compute their residuals"""
+        
+        # Sample current points (works for both uniform and adaptive)
+        if self.config.sampling.strat == "Uniform":
+            x_interior, t_interior, E_interior = self.sampler.sample_interior_points(networks)
+            x_boundary, t_boundary, E_boundary = self.sampler.sample_boundary_points(networks)
+            x_initial, t_initial, E_initial = self.sampler.sample_initial_points(networks)
+            t_film, E_film = self.sampler.sample_film_physics_points()
+        else:  # Adaptive
+            x_interior, t_interior, E_interior = self.sampler.get_interior_points()
+            x_boundary, t_boundary, E_boundary = self.sampler.get_boundary_points()
+            x_initial, t_initial, E_initial = self.sampler.get_initial_points()
+            t_film, E_film = self.sampler.get_film_points()
+        
+        # Compute residuals directly using existing loss functions
+        _,_, interior_residuals = compute_interior_loss(
+            x_interior, t_interior, E_interior, networks, self.physics, return_residuals=True)
+        
+        _,_, _, boundary_residuals = compute_boundary_loss(
+            x_boundary, t_boundary, E_boundary, networks, self.physics,return_residuals=True)
+        
+        _, _,_,initial_residuals = compute_initial_loss(
+            x_initial, t_initial, E_initial, networks, self.physics, return_residuals=True)
+        
+        _, film_residuals = compute_film_physics_loss(
+            t_film, E_film, networks, self.physics, return_residuals=True)
+        
+
+        # Package for plotting
+        points_dict = {
+            'interior': torch.cat([x_interior, t_interior, E_interior], dim=1),
+            'boundary': torch.cat([x_boundary, t_boundary, E_boundary], dim=1),
+            'initial': torch.cat([x_initial, t_initial, E_initial], dim=1),
+            'film': torch.cat([t_film, E_film], dim=1)
+        }
+        
+        residuals_dict = {
+            **interior_residuals,  # cv_pde, av_pde, h_pde, poisson_pde
+            'boundary': boundary_residuals,
+            'initial': initial_residuals,
+            'film_physics': film_residuals
+        }
+        
+        return points_dict, residuals_dict
 
     def training_step(self) -> Dict[str, float]:
         """
@@ -360,8 +429,6 @@ class PINNTrainer:
         Returns:
             Dictionary of loss values (as floats)
         """
-
-     
         # Zero gradients
         self.optimizer.zero_grad()
 
@@ -371,6 +438,17 @@ class PINNTrainer:
         # Backward pass
         total_loss = loss_dict['total']
         total_loss.backward()
+
+
+        #gradient_clipping
+        torch.nn.utils.clip_grad_norm_(self.networks.get_all_parameters(), max_norm=1.0)
+
+        if self.use_al:
+            # Flip gradients for multipliers (ascent)
+            torch.nn.utils.clip_grad_norm_(self.al_manager.get_multiplier_parameters(), max_norm=1.0)
+            for param in self.al_manager.get_multiplier_parameters():
+                if param.grad is not None:
+                    param.grad *= -1
 
         # Optimizer step
         self.optimizer.step()
@@ -404,10 +482,32 @@ class PINNTrainer:
             else:
                 self.loss_history[key].append(0.0)  # Default for missing keys
 
+
     def print_progress(self, loss_dict: Dict[str, float]) -> None:
         """Print detailed training progress including weight information."""
         if self.current_step % self.print_freq == 0:
             print(f"\n=== Step {self.current_step} ===")
+            if self.use_al:
+                # AL-specific reporting
+                print(f"  Interior PDE: {loss_dict['interior']:.2e}")
+                if 'penalty' in loss_dict:
+                    print(f"  Penalty (β‖C‖²): {loss_dict['penalty']:.2e}")
+                if 'lagrangian' in loss_dict:
+                    print(f"  Lagrangian (⟨λ,C⟩): {loss_dict['lagrangian']:.2e}")
+                for name, param in self.al_manager.lambda_params.items():
+                    constraint_name = name.replace('lambda_', '')
+                    if constraint_name in self.al_manager.lambda_distributions:
+                        # Save mean absolute value or max
+                        self.al_manager.lambda_distributions[constraint_name].append(
+                            torch.mean(torch.abs(param)).item()
+                        )
+                # Show max multiplier magnitude
+                if hasattr(self, 'al_manager') and self.al_manager.is_initialized:
+                    stats = self.al_manager.log_multiplier_stats()
+                    max_lambda = max([v for k, v in stats.items() if k.endswith('_max')])
+                    print(f"  Max |λ|: {max_lambda:.2e}")
+                return  
+            
             if self.weighting_strategy == 'hybrid_ntk_batch':
                 if self.current_step < self.ntk_steps:
                     phase = f"NTK Phase ({self.current_step}/{self.ntk_steps})"
@@ -457,6 +557,14 @@ class PINNTrainer:
                 print(
                     f"  CV: {loss_dict['weighted_cv_ic']:.6f} | AV: {loss_dict['weighted_av_ic']:.6f} | H: {loss_dict['weighted_h_ic']:.6f}")
                 print(f"  Poisson: {loss_dict['weighted_poisson_ic']:.6f} | L: {loss_dict['weighted_L_ic']:.6f}")
+            
+        if self.current_step % self.config.plotting.topksteps == 0:
+            points_dict, residuals_dict = self._collect_current_points_and_residuals(self.networks)
+            from analysis.analysis import plot_top_k_worst
+            import os
+            save_path = os.path.join(os.getcwd(), "worst", f"worst_points_step_{self.current_step:06d}.png")
+            os.makedirs(os.path.dirname(save_path), exist_ok=True)
+            plot_top_k_worst(points_dict,residuals_dict,save_path=save_path)
 
     def get_al_training_stats(self) -> Dict[str, Any]:
         """Get AL-specific training statistics"""
@@ -536,6 +644,17 @@ class PINNTrainer:
         if self.current_step % self.save_freq == 0 and self.current_step > 0:
             self.save_checkpoint(f"model_step_{self.current_step}")
 
+
+    def track_l2_lambda(self):
+        """Compute combined L2 norm of ALL multipliers"""
+        total_l2_norm = 0.0
+        for param in self.al_manager.get_multiplier_parameters():
+            total_l2_norm += torch.norm(param.detach()).cpu().item() ** 2
+
+            total_l2_norm = total_l2_norm ** 0.5  # Take square root for L2 norm
+            self.total_multiplier_l2_history.append(total_l2_norm)
+
+
     def train(self, manual_loss_weights: Optional[Dict[str, float]] = None) -> Dict[str, List[float]]:
         """
         Run the complete training process with automatic loss balancing.
@@ -570,6 +689,10 @@ class PINNTrainer:
             # Update tracking
             self.update_loss_history(loss_dict)
 
+
+            if self.use_al and self.current_step % 10 == 0:  # Track every 10 steps to reduce overhead
+                self.track_l2_lambda()
+
             # Print progress
             self.print_progress(loss_dict)
 
@@ -593,7 +716,10 @@ class PINNTrainer:
         print(f"⏱️  Training time: {elapsed_time / 60:.1f} minutes")
         print(f"🎯 Training speed: {self.max_steps / (elapsed_time / 60):.1f} steps/minute")
 
-        if self.weighting_strategy == 'ntk' and self.ntk_weights is not None:
+        if self.use_al:
+            print(f"🔗 AL Method: β={self.al_manager.config.beta}")
+            print(f"⚖️  Final constraint satisfaction: [show constraint metrics]")
+        elif self.weighting_strategy == 'ntk' and self.ntk_weights is not None:
             print(f"⚖️  Final NTK weights: {self.ntk_weights}")
         else:
             print(f"⚖️  Final weights: {self.loss_weights}")

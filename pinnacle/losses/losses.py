@@ -702,7 +702,6 @@ def _extract_constraint_violations_al(loss_dict: Dict[str, torch.Tensor]) -> Dic
     for bc_type in boundary_constraints:
         loss_key = f'weighted_{bc_type}'
         if loss_key in loss_dict:
-            # Direct assignment: loss is already ‖C‖₂
             violations[bc_type] = loss_dict[loss_key]
     
     # Initial constraints - direct extraction  
@@ -727,27 +726,21 @@ def _compute_al_terms(constraint_violations: Dict[str, torch.Tensor],
     """
     total_penalty = torch.tensor(0.0, device=al_manager.device)
     total_lagrangian = torch.tensor(0.0, device=al_manager.device)
-    
+
     for constraint_name, violation_norm in constraint_violations.items():
         lambda_key = f'lambda_{constraint_name}'
-        
-        if lambda_key in al_manager.lambda_params:
-            # Penalty term: β‖C‖²₂ (square the norm)
-            penalty_contribution = al_manager.config.beta * (violation_norm ** 2)
+        if lambda_key in al_manager.lambda_params and residuals_dict and constraint_name in residuals_dict:
+            raw_residual = residuals_dict[constraint_name]
+            lambda_vals = al_manager.lambda_params[lambda_key]
+            
+            N = len(raw_residual)  # Number of constraint points
+            
+            # Penalty term: (β/N) * Σ C²
+            penalty_contribution = (al_manager.config.beta / N) * torch.sum(raw_residual ** 2)
             total_penalty += penalty_contribution
             
-            # Lagrangian term: ⟨λ, C⟩
-            # Note: violation_norm is ‖C‖₂, but we need C for inner product
-            if residuals_dict and constraint_name in residuals_dict:
-                # Use raw residuals for exact computation
-                raw_residual = residuals_dict[constraint_name]
-                lagrangian_contribution = torch.sum(
-                    al_manager.lambda_params[lambda_key] * raw_residual
-                )
-            else:
-                print("AHHH FUCKKKK AHHHHH HOTT!!!")
-                return
-            
+            # Lagrangian term: (1/N) * Σ λ * C  
+            lagrangian_contribution = (1.0 / N) * torch.sum(lambda_vals * raw_residual)
             total_lagrangian += lagrangian_contribution
     
     return total_penalty, total_lagrangian
@@ -776,7 +769,7 @@ def compute_total_loss_al(x_interior, t_interior, E_interior,
             x_boundary, t_boundary, E_boundary,
             x_initial, t_initial, E_initial,
             t_film, E_film, networks, physics,
-            weights={'interior': 1.0, 'boundary': 0.0, 'initial': 0.0, 'film_physics': 0.0},
+            weights={'interior': 1.0, 'boundary': 1.0, 'initial': 1.0, 'film_physics': 1.0},
             return_residuals=True
         )
     
@@ -797,8 +790,7 @@ def compute_total_loss_al(x_interior, t_interior, E_interior,
         'lagrangian': lagrangian_term,
     }
 
-    al_manager.update_multipliers(constraint_violations)
 
     if return_residuals:
-        return al_loss_dict, residuals_dict
+        return al_loss_dict, residuals_dict, constraint_violations
     return al_loss_dict

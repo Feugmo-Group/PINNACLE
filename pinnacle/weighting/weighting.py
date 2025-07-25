@@ -254,13 +254,13 @@ class NTKWeightManager:
             return_residuals=True
         )
 
-        _, _, boundary_residuals = compute_boundary_loss(
+        _, _, boundary_residuals, _ = compute_boundary_loss(
             x_boundary, t_boundary, E_boundary,
             self.networks, self.physics,
             return_residuals=True
         )
 
-        _, _, initial_residuals = compute_initial_loss(
+        _, _, initial_residuals, _ = compute_initial_loss(
             x_initial, t_initial, E_initial,
             self.networks, self.physics,
             return_residuals=True
@@ -410,6 +410,12 @@ class ALWeightManager:
         self.constraint_history = {}
         self.multiplier_history = {}
 
+        self.lambda_distributions = {
+        'cv_mf_bc': [], 'av_mf_bc': [], 'u_mf_bc': [],
+        'cv_fs_bc': [], 'av_fs_bc': [], 'u_fs_bc': [], 'h_fs_bc': [],
+        'cv_ic': [], 'av_ic': [], 'h_ic': [], 'poisson_ic': [], 'L_ic': []
+        }
+
 
     def _initialize_multipliers(self) -> Dict[str, nn.Parameter]:
         """
@@ -427,7 +433,7 @@ class ALWeightManager:
         batch_config = self.sampler.batch_sizes
         
         # Boundary constraint multipliers (7 types)
-        n_boundary = batch_config['BC']  # e.g., 100 points
+        n_boundary = batch_config['BC']//2  # e.g., 100 points
         boundary_types = ['cv_mf_bc', 'av_mf_bc', 'u_mf_bc', 
                          'cv_fs_bc', 'av_fs_bc', 'u_fs_bc', 'h_fs_bc']
         
@@ -461,6 +467,8 @@ class ALWeightManager:
         print(f"  Initial: {len(initial_types)} types × {n_initial} points = {len(initial_types) * n_initial}")
         print(f"  Film: 1 type × {n_film} points = {n_film}")
         print(f"  📊 Total multiplier parameters: {total_params}")
+
+        self.is_initialized = True
         
         return 
     
@@ -469,30 +477,7 @@ class ALWeightManager:
         if self.lambda_params is None:
             return []
         return list(self.lambda_params.values())
-    
-
-    def update_multipliers(self, constraint_violations: Dict[str, torch.Tensor]):
-        """
-        Update Lagrange multipliers: λ ← λ + η_λ * C(θ)
-        
-        Args:
-            constraint_violations: Dict of constraint violations by type
-        """
-        if not self.is_initialized:
-            return
-            
-        with torch.no_grad():
-            for constraint_name, violation in constraint_violations.items():
-                lambda_key = f'lambda_{constraint_name}'
-                
-                if lambda_key in self.lambda_params:
-                    # Standard AL update: λ ← λ + η_λ * C
-                    self.lambda_params[lambda_key] += self.config.lr_lambda * violation.detach()
-                    
-                    # Clip to prevent unbounded growth
-                    self.lambda_params[lambda_key].clamp_(-self.config.lambda_max, 
-                                                        self.config.lambda_max)
-                    
+                        
     def get_constraint_satisfaction_metrics(self, constraint_violations: Dict[str, torch.Tensor]) -> Dict[str, float]:
         """Compute constraint satisfaction metrics for monitoring"""
         metrics = {}
