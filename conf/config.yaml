@@ -2,23 +2,23 @@
 arch:
   fully_connected:
     # Architecture for both networks
-    layer_size: 20  #per paper
-    hidden_layers: 5
+    layer_size: 50  #per paper
+    hidden_layers: 8
   potential:
-    layer_size: 20
-    hidden_layers: 5
+    layer_size: 50
+    hidden_layers: 8
   CV:
-    layer_size: 20  
-    hidden_layers: 5
+    layer_size: 50  
+    hidden_layers: 8
   AV:
-    layer_size: 20  
-    hidden_layers: 5
+    layer_size: 50  
+    hidden_layers: 8
   h:
-    layer_size: 20 
-    hidden_layers: 5
+    layer_size: 50 
+    hidden_layers: 8
   L:
-    layer_size: 20  
-    hidden_layers: 5
+    layer_size: 50  
+    hidden_layers: 8
 
 # Optimizer settings
 optimizer:
@@ -28,10 +28,13 @@ optimizer:
     eps: 1.0e-8
     weight_decay: 1e-2
     amsgrad: False
+networks:
+  type: "Residual"
+  initialize: True
 
 # Learning rate scheduler
 scheduler:
-  type: "RLROP"
+  type: "None"
   tf_exponential_lr:
     decay_rate: 0.99
     decay_steps: 15000
@@ -74,6 +77,7 @@ sampling:
     
     # Computational settings
     residual_batch_size: 1000
+
 # Training settings
 training:
   max_steps: 20000
@@ -92,7 +96,7 @@ training:
   al_lambda_max: 100.0             # Clipping bound for multipliers
 # Batch sizes for different constraints
 batch_size:
-  BC: 1024 # Boundary points per boundary, modular version will require 2048 for 1024 at each boundary
+  BC: 1024 # Boundary points per boundary
   interior: 2048 # Interior points
   inference: 1024 # Points for inference/visualization
   IC: 1024
@@ -188,12 +192,12 @@ pde:
 
 domain:
   time:
-    time_scale: 3600
+    time_scale: 9000000 
   initial:
     L_initial: 1e-9 # Initial film thickness [m]
 
 experiment:
-  name: "base+reduced(sampling)+ntk+noscheduler"  # Give experiments meaningful names
+  name: "base_reduced_ntk_no_holes_no_sched_2500_hours"  # Give experiments meaningful names
 plotting:
   topksteps: 1000
 

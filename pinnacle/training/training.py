@@ -562,9 +562,9 @@ class PINNTrainer:
             points_dict, residuals_dict = self._collect_current_points_and_residuals(self.networks)
             from analysis.analysis import plot_top_k_worst
             import os
-            save_path = os.path.join(os.getcwd(), "worst", f"worst_points_step_{self.current_step:06d}.png")
+            save_path = os.path.join(os.getcwd(), f"worst_{self.config.experiment.name}", f"worst_points_step_{self.current_step:06d}.png")
             os.makedirs(os.path.dirname(save_path), exist_ok=True)
-            plot_top_k_worst(points_dict,residuals_dict,save_path=save_path)
+            plot_top_k_worst(points_dict,residuals_dict,networks=self.networks,save_path=save_path)
 
     def get_al_training_stats(self) -> Dict[str, Any]:
         """Get AL-specific training statistics"""

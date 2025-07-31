@@ -114,6 +114,83 @@ class FFN(nn.Module):
         return self.output_layer(x)
 
 
+class ResidualBlock(nn.Module):
+    """Single residual block: x + F(x)"""
+    def __init__(self, layer_size, activation):
+        super(ResidualBlock, self).__init__()
+        self.layer_size = layer_size
+        self.activation = activation
+        
+        # Two layers in each residual block
+        self.linear1 = nn.Linear(layer_size, layer_size)
+        self.linear2 = nn.Linear(layer_size, layer_size)
+        
+    def initialize_weights(self):
+        nn.init.xavier_normal_(self.linear1.weight)
+        nn.init.zeros_(self.linear1.bias)
+        nn.init.xavier_normal_(self.linear2.weight)
+        nn.init.zeros_(self.linear2.bias)
+    
+    def forward(self, x):
+        identity = x  # Save input for residual connection
+        
+        # F(x) computation
+        out = self.activation(self.linear1(x))
+        out = self.linear2(out)  # No activation on final layer of block
+        
+        # Residual connection: x + F(x)
+        out = out + identity
+        
+        # Activation after residual connection
+        out = self.activation(out)
+        
+        return out
+    
+class ResidualFFN(nn.Module):
+    def __init__(self, input_dim=3, output_dim=1, num_layers=8, layer_size=50, initialize_weights=False):
+        super(ResidualFFN, self).__init__()
+        self.layer_size = layer_size
+        self.num_layers = num_layers
+        self.activation = Swish()
+        
+        # Input projection to get to residual dimension
+        self.input_layer = nn.Linear(input_dim, self.layer_size)
+        
+        # Residual blocks
+        self.residual_layers = nn.ModuleList([
+            ResidualBlock(self.layer_size, self.activation)
+            for _ in range(self.num_layers)  
+        ])
+        
+        # Output layer
+        self.output_layer = nn.Linear(self.layer_size, output_dim)
+        
+        if initialize_weights:
+            self.initialize_weights()
+    
+    def initialize_weights(self):
+        """Apply Xavier initialization to all linear layers"""
+        nn.init.xavier_normal_(self.input_layer.weight)
+        nn.init.zeros_(self.input_layer.bias)
+        
+        for block in self.residual_layers:
+            block.initialize_weights()
+        
+        nn.init.xavier_normal_(self.output_layer.weight)
+        nn.init.zeros_(self.output_layer.bias)
+    
+    def forward(self, x):
+        # Input projection
+        x = self.activation(self.input_layer(x))
+        
+        # Residual blocks
+        for residual_layer in self.residual_layers:
+            x = residual_layer(x)
+        
+        # Output
+        return self.output_layer(x)
+    
+
 class NetworkManager:
     """
     Manages multiple neural networks for the PINNACLE system.
@@ -150,15 +227,26 @@ class NetworkManager:
             ('film_thickness', 2, 'L'),  # (t, E) -> L_hat
         ]
 
-        for net_name, input_dim, config_key in network_specs:
-            self.networks[net_name] = FFN(
+        if self.config.networks.type == "FFN":
+            for net_name, input_dim, config_key in network_specs:
+                self.networks[net_name] = FFN(
+                    input_dim=input_dim,
+                    output_dim=1,
+                    hidden_layers=arch_config[config_key]['hidden_layers'],
+                    layer_size=arch_config[config_key]['layer_size'],
+                    activation="swish",  # Can make this configurable too
+                    initialize_weights= self.config.networks.initialize
+                ).to(self.device)
+        else:
+            for net_name, input_dim, config_key in network_specs:
+                self.networks[net_name] = ResidualFFN(
                 input_dim=input_dim,
                 output_dim=1,
-                hidden_layers=arch_config[config_key]['hidden_layers'],
+                num_layers=arch_config[config_key]['hidden_layers'], #sort of fixing them to be the same, that is how many layers the residual net adds by design. 
                 layer_size=arch_config[config_key]['layer_size'],
-                activation="swish",  # Can make this configurable too
-                initialize_weights=False
-            ).to(self.device)
+                initialize_weights= self.config.networks.initialize
+                ).to(self.device)
+            
 
     def get_network(self, name: str) -> nn.Module:
         """Get a specific network by name"""
