@@ -191,7 +191,7 @@ Tuple[torch.Tensor, Dict[str, torch.Tensor], torch.Tensor]]:
     av_pred_fs = networks['av'](inputs_fs)
     av_pred_fs_x = physics.grad_computer.compute_derivative(av_pred_fs, x_fs)
     av_fs_residual = ((-physics.transport.D_av * physics.scales.cc / physics.scales.lc) * av_pred_fs_x -
-                      (physics.kinetics.k4_0 * torch.exp(physics.kinetics.alpha_av * u_pred_fs) -
+                      (physics.kinetics.k4_0 * torch.exp(physics.kinetics.alpha_av * u_pred_fs) + #are you fucking kidding me!
                        physics.transport.U_av * physics.scales.phic / physics.scales.lc * u_pred_fs_x) * av_pred_fs * physics.scales.cc)
     av_fs_loss = torch.mean(av_fs_residual ** 2)
 

@@ -351,7 +351,8 @@ def plot_ntk_weight_densities(ntk_weight_manager:NTKWeightManager, save_path: Op
 
 def plot_top_k_worst(points_dict: Dict[str, torch.Tensor], 
                      residuals_dict: Dict[str, torch.Tensor], 
-                     k: int = 1000, 
+                     k: int = 250, 
+                     networks: Optional[Dict] = None,
                      save_path: Optional[str] = None) -> None:
     """
     Plot top k worst points (highest residuals) for any sampling method.
@@ -367,13 +368,25 @@ def plot_top_k_worst(points_dict: Dict[str, torch.Tensor],
             - 'film': (N, 2) tensor [t, E]
         residuals_dict: Dictionary containing residual values
             - 'cv_pde', 'av_pde', 'h_pde', 'poisson_pde': Interior residuals
-            - 'boundary': Boundary residuals
+            - 'boundary_residuals_dict': Boundary residuals dict
             - 'initial': Initial condition residuals
             - 'film_physics': Film physics residuals
         k: Number of worst points to plot for each component
+        networks: Optional dict of networks (to plot film boundary)
         save_path: Optional path to save the plot
     """
+    # Detect the current potential value from the points
+    current_potential = None
+    for component in ['interior', 'boundary', 'initial']:
+        if component in points_dict:
+            current_potential = points_dict[component][0, 2].item()  # E value
+            break
+    if current_potential is None and 'film' in points_dict:
+        current_potential = points_dict['film'][0, 1].item()  # E value for film
+    
     print(f"🎯 Plotting top {k} worst points...")
+    if current_potential is not None:
+        print(f"  📊 Current potential: E = {current_potential:.3f}")
     
     fig, ax = plt.subplots(figsize=(12, 8))
     
@@ -383,19 +396,20 @@ def plot_top_k_worst(points_dict: Dict[str, torch.Tensor],
                            torch.abs(residuals_dict['av_pde']) + 
                            torch.abs(residuals_dict['h_pde']) + 
                            torch.abs(residuals_dict['poisson_pde'])).flatten()
+        interior_points = points_dict['interior']
         
         if len(interior_combined) > 0:
             k_interior = min(k, len(interior_combined))
             _, worst_interior_idx = torch.topk(interior_combined, k=k_interior)
-            interior_worst = points_dict['interior'][worst_interior_idx]
+            interior_worst = interior_points[worst_interior_idx]
             
             ax.scatter(interior_worst[:, 1].detach().cpu(), interior_worst[:, 0].detach().cpu(),  # t, x
                       c='red', alpha=0.7, s=15, label=f'Interior (top {k_interior})', 
                       marker='o')
     
     # Boundary points - combine all boundary condition residuals (same as interior approach)
-    if 'boundary' in points_dict and 'boundary' in residuals_dict:
-        boundary_residuals_dict = residuals_dict['boundary']
+    if 'boundary' in points_dict and 'boundary_residuals_dict' in residuals_dict:
+        boundary_residuals_dict = residuals_dict['boundary_residuals_dict']
         boundary_combined = (torch.abs(boundary_residuals_dict['cv_mf_bc']) + 
                            torch.abs(boundary_residuals_dict['av_mf_bc']) + 
                            torch.abs(boundary_residuals_dict['u_mf_bc']) + 
@@ -409,7 +423,7 @@ def plot_top_k_worst(points_dict: Dict[str, torch.Tensor],
             k_boundary = min(k, len(boundary_combined))
             _, worst_boundary_idx = torch.topk(boundary_combined, k=k_boundary)
             boundary_worst = boundary_points[worst_boundary_idx]
-            
+  
             ax.scatter(boundary_worst[:, 1].detach().cpu(), boundary_worst[:, 0].detach().cpu(),  # t, x
                       c='blue', alpha=0.7, s=15, label=f'Boundary (top {k_boundary})', 
                       marker='s')
@@ -429,8 +443,8 @@ def plot_top_k_worst(points_dict: Dict[str, torch.Tensor],
             initial_worst = points_dict['initial'][worst_initial_idx]
             
             ax.scatter(initial_worst[:, 1].detach().cpu(), initial_worst[:, 0].detach().cpu(),  # t, x
-                      c='green', alpha=0.7, s=15, label=f'Initial (top {k_initial})', 
-                      marker='^')
+                    c='green', alpha=0.7, s=15, label=f'Initial (top {k_initial})', 
+                    marker='^')
     
     # Film physics points (only have t, E - need to handle differently)
     if 'film' in points_dict and 'film_physics' in residuals_dict:
@@ -447,13 +461,40 @@ def plot_top_k_worst(points_dict: Dict[str, torch.Tensor],
     
     ax.set_xlabel('Time (t)')
     ax.set_ylabel('Space (x)')
-    ax.set_title(f'Top {k} Worst Points by Component Type')
+    if current_potential is not None:
+        ax.set_title(f'Top {k} Worst Points by Component Type (E = {current_potential:.3f})')
+    else:
+        ax.set_title(f'Top {k} Worst Points by Component Type')
     ax.legend()
     ax.grid(True, alpha=0.3)
     
+    # Plot boundary location if we have film thickness network and current potential
+    if current_potential is not None and networks is not None:
+        try:
+            # Create time range for boundary visualization
+            t_boundary_viz = torch.linspace(0, 1, 100, device=next(iter(points_dict.values())).device)
+            E_boundary_viz = torch.full_like(t_boundary_viz, current_potential)
+            
+            # Get film thickness network prediction
+            L_inputs = torch.stack([t_boundary_viz, E_boundary_viz], dim=1)
+            with torch.no_grad():
+                if 'film_thickness' in networks:
+                    L_boundary = networks['film_thickness'](L_inputs).squeeze()
+                    
+                    # Plot the boundary as a line
+                    ax.plot(t_boundary_viz.detach().cpu(), L_boundary.detach().cpu(), 
+                           'k--', linewidth=2, label='Film/Solution Boundary', alpha=0.8)
+                    ax.legend()  # Update legend
+                    
+        except Exception as e:
+            print(f"  ⚠️ Could not plot boundary: {e}")
+    
     # Save or show
     if save_path:
-        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        # Only create directory if there is one
+        dir_path = os.path.dirname(save_path)
+        if dir_path:  # Only if directory path is not empty
+            os.makedirs(dir_path, exist_ok=True)
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
         print(f"  💾 Saved worst points plot to {save_path}")
     else:
@@ -526,6 +567,22 @@ def visualize_predictions(networks, physics, step: str = "final", save_path: Opt
         L_inputs_1d = torch.cat([t_hat_1d, E_hat_1d], dim=1)
         L_hat_1d = networks['film_thickness'](L_inputs_1d).squeeze()
 
+
+        # Film growth at multiple non-steady state potentials
+        
+        # Select 5 representative potentials across the range
+        E_values_dimensional = [-0.8, -0.2, 0.4, 1.0, 1.6]  # Representative voltages
+        E_hat_values = [E_val / physics.scales.phic for E_val in E_values_dimensional]
+        colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', "#8b61b3"]  # Distinct colors
+        
+        # Compute film growth for each potential
+        L_hat_multi = []
+        for E_hat_val in E_hat_values:
+            E_hat_tensor = torch.full_like(t_hat_1d, E_hat_val)
+            L_inputs_multi = torch.cat([t_hat_1d, E_hat_tensor], dim=1)
+            L_hat_curve = networks['film_thickness'](L_inputs_multi).squeeze()
+            L_hat_multi.append(L_hat_curve.cpu().numpy())
+
         # Convert to numpy for plotting
         t_hat_np = t_hat_range.cpu().numpy()
         x_hat_np = x_hat_range.cpu().numpy()
@@ -561,12 +618,15 @@ def visualize_predictions(networks, physics, step: str = "final", save_path: Opt
         axes[0, 2].set_title(f'Dimensionless Anion Vacancies ĉ_av at Ê={E_hat_fixed.item():.3f}')
         plt.colorbar(im3, ax=axes[0, 2])
 
-        # 4. Dimensionless holes
-        im4 = axes[1, 0].contourf(X_hat_np, T_hat_np, c_h_hat_np, levels=50, cmap='Purples')
-        axes[1, 0].set_xlabel('Dimensionless Position x̂')
-        axes[1, 0].set_ylabel('Dimensionless Time t̂')
-        axes[1, 0].set_title(f'Dimensionless Holes ĉ_h at Ê={E_hat_fixed.item():.3f}')
-        plt.colorbar(im4, ax=axes[1, 0])
+        # 4. Film Thickness Evoloution at non-steady state potentials
+        for i, (L_curve, E_val, color) in enumerate(zip(L_hat_multi, E_values_dimensional, colors)):
+            axes[1, 0].plot(t_hat_np, L_curve, color=color, linewidth=2.5, 
+                           label=f'E = {E_val:.1f} V', alpha=0.8)
+        axes[1, 0].set_xlabel('Dimensionless Time t̂')
+        axes[1, 0].set_ylabel('Dimensionless Film Thickness L̂')
+        axes[1, 0].set_title('Film Growth at Different Applied Potentials')
+        axes[1, 0].grid(True, alpha=0.3)
+        axes[1, 0].legend(fontsize=10, framealpha=0.9)
 
         # 5. Dimensionless film thickness
         axes[1, 1].plot(t_hat_np, L_hat_np, 'k-', linewidth=3)
