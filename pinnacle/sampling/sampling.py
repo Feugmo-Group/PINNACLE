@@ -708,7 +708,8 @@ class CollocationSampler:
         self.config = config
         self.physics = physics
         self.device = device
-
+        self.time_scale = physics.domain.time_scale 
+        self.tc = physics.scales.tc 
         # Store batch sizes for easy access
         self.batch_sizes = config["batch_size"]
 
@@ -727,7 +728,7 @@ class CollocationSampler:
         batch_size = self.batch_sizes["interior"]
 
         # Sample time and applied potential
-        t = torch.rand(batch_size, 1, device=self.device, requires_grad=True)
+        t = torch.rand(batch_size, 1, device=self.device, requires_grad=True) * self.time_scale / self.tc
         single_E = (
             torch.rand(1, 1, device=self.device)
             * (self.physics.geometry.E_max - self.physics.geometry.E_min)
@@ -758,7 +759,7 @@ class CollocationSampler:
         batch_size = 2 * self.batch_sizes["BC"]
 
         # Sample time and applied potential
-        t = torch.rand(batch_size, 1, device=self.device, requires_grad=True)
+        t = torch.rand(batch_size, 1, device=self.device, requires_grad=True) * self.time_scale / self.tc 
         single_E = (
             torch.rand(1, 1, device=self.device)
             * (self.physics.geometry.E_max - self.physics.geometry.E_min)
@@ -804,7 +805,7 @@ class CollocationSampler:
         batch_size = self.batch_sizes["IC"]
 
         # Initial time (t = 0)
-        t = torch.zeros(batch_size, 1, device=self.device, requires_grad=True)
+        t = torch.zeros(batch_size, 1, device=self.device, requires_grad=True) * self.time_scale / self.tc
         single_E = (
             torch.rand(1, 1, device=self.device)
             * (self.physics.geometry.E_max - self.physics.geometry.E_min)
@@ -833,7 +834,7 @@ class CollocationSampler:
         batch_size = self.batch_sizes["L"]
 
         # Sample time and applied potential
-        t = torch.rand(batch_size, 1, device=self.device, requires_grad=True)
+        t = torch.rand(batch_size, 1, device=self.device, requires_grad=True) * self.time_scale / self.tc 
         single_E = (
             torch.rand(1, 1, device=self.device)
             * (self.physics.geometry.E_max - self.physics.geometry.E_min)
