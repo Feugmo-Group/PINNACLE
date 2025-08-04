@@ -353,6 +353,7 @@ def plot_top_k_worst(points_dict: Dict[str, torch.Tensor],
                      residuals_dict: Dict[str, torch.Tensor], 
                      k: int = 250, 
                      networks: Optional[Dict] = None,
+                     physics: Optional[ElectrochemicalPhysics] = None,
                      save_path: Optional[str] = None) -> None:
     """
     Plot top k worst points (highest residuals) for any sampling method.
@@ -461,6 +462,7 @@ def plot_top_k_worst(points_dict: Dict[str, torch.Tensor],
     
     ax.set_xlabel('Time (t)')
     ax.set_ylabel('Space (x)')
+    ax.set_xlim(0,physics.domain.time_scale/physics.scales.tc)
     if current_potential is not None:
         ax.set_title(f'Top {k} Worst Points by Component Type (E = {current_potential:.3f})')
     else:
@@ -472,11 +474,11 @@ def plot_top_k_worst(points_dict: Dict[str, torch.Tensor],
     if current_potential is not None and networks is not None:
         try:
             # Create time range for boundary visualization
-            t_boundary_viz = torch.linspace(0, 1, 100, device=next(iter(points_dict.values())).device)
+            t_boundary_viz = torch.linspace(0, physics.domain.time_scale/physics.scales.tc, 100, device=next(iter(points_dict.values())).device)
             E_boundary_viz = torch.full_like(t_boundary_viz, current_potential)
             
             # Get film thickness network prediction
-            L_inputs = torch.stack([t_boundary_viz, E_boundary_viz], dim=1)
+            L_inputs = torch.cat([t_boundary_viz.unsqueeze(-1), E_boundary_viz.unsqueeze(-1)], dim=1)
             with torch.no_grad():
                 if 'film_thickness' in networks:
                     L_boundary = networks['film_thickness'](L_inputs).squeeze()
@@ -533,10 +535,10 @@ def visualize_predictions(networks, physics, step: str = "final", save_path: Opt
         E_hat_fixed = torch.tensor([[0.8 / physics.scales.phic]], device=physics.device)  # Normalized E
 
         # Dimensionless time range (0 to 1)
-        t_hat_range = torch.linspace(0, 1.0, n_temporal, device=physics.device)
+        t_hat_range = torch.linspace(0, physics.domain.time_scale / physics.scales.tc, n_temporal, device=physics.device)
 
         # Get final dimensionless film thickness to set spatial range
-        t_hat_final = torch.tensor([[1.0]], device=physics.device)
+        t_hat_final = torch.tensor([[physics.domain.time_scale / physics.scales.tc]], device=physics.device)
         L_hat_final = networks['film_thickness'](torch.cat([t_hat_final, E_hat_fixed], dim=1)).item()
         x_hat_range = torch.linspace(0, L_hat_final, n_spatial, device=physics.device)
 
@@ -571,7 +573,7 @@ def visualize_predictions(networks, physics, step: str = "final", save_path: Opt
         # Film growth at multiple non-steady state potentials
         
         # Select 5 representative potentials across the range
-        E_values_dimensional = [-0.8, -0.2, 0.4, 1.0, 1.6]  # Representative voltages
+        E_values_dimensional = [0.4, 1.0,1.2, 1.6,1.8]  # Representative voltages
         E_hat_values = [E_val / physics.scales.phic for E_val in E_values_dimensional]
         colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', "#8b61b3"]  # Distinct colors
         
@@ -715,6 +717,7 @@ def generate_polarization_curve(networks, physics, t_hat_eval: float = 1.0, n_po
     # Define potential range
     E_hat_min = physics.geometry.E_min/physics.scales.phic 
     E_hat_max = physics.geometry.E_max/physics.scales.phic
+    t_hat_eval = physics.domain.time_scale / physics.scales.tc
 
     with torch.no_grad():
         E_hat_values = torch.linspace(E_hat_min, E_hat_max, n_points, device=physics.device)
@@ -788,6 +791,7 @@ def generate_polarization_curve(networks, physics, t_hat_eval: float = 1.0, n_po
             plt.show()
 
         plt.close()
+
 
 def plot_training_losses(loss_history: Dict[str, List[float]], save_path: Optional[str] = None) -> None:
     """

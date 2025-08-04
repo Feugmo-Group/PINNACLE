@@ -2,23 +2,23 @@
 arch:
   fully_connected:
     # Architecture for both networks
-    layer_size: 50  #per paper
-    hidden_layers: 8
+    layer_size: 20  #per paper
+    hidden_layers: 5
   potential:
-    layer_size: 50
-    hidden_layers: 8
+    layer_size: 20
+    hidden_layers: 5
   CV:
-    layer_size: 50  
-    hidden_layers: 8
+    layer_size: 20  
+    hidden_layers: 5
   AV:
-    layer_size: 50  
-    hidden_layers: 8
+    layer_size: 20  
+    hidden_layers: 5
   h:
-    layer_size: 50 
-    hidden_layers: 8
+    layer_size: 20 
+    hidden_layers: 5
   L:
-    layer_size: 50  
-    hidden_layers: 8
+    layer_size: 20  
+    hidden_layers: 5
 
 # Optimizer settings
 optimizer:
@@ -29,7 +29,7 @@ optimizer:
     weight_decay: 1e-2
     amsgrad: False
 networks:
-  type: "Residual"
+  type: "FFN"
   initialize: True
 
 # Learning rate scheduler
@@ -105,7 +105,7 @@ batch_size:
 # Custom PDE parameters
 pde:
   scales:
-    lc: 1e-9
+    lc: 1e-9 #1 nanometer
     cc: 1e-5
   physics:  
     include_holes: False
@@ -115,8 +115,8 @@ pde:
     T: 293 # Temperature [K]
     k_B: 1.3806e-23 # Boltzmann constant [J/K]
     eps0: 8.85e-12 # Vacuum permittivity [F/m]
-    E_min: -1.0  # External applied potential [V] - placeholder for now
-    E_max: 1.8
+    E_min: 0.0  # External applied potential [V] - placeholder for now
+    E_max: 2.0  # Maximum potential [V]
     # Diffusion coefficients [m²/s]
     D_cv: 1.0e-21
     D_av: 1.0e-21
@@ -192,7 +192,7 @@ pde:
 
 domain:
   time:
-    time_scale: 9000000 
+    time_scale: 900000 # Time scale for the simulation [s]
   initial:
     L_initial: 1e-9 # Initial film thickness [m]
 

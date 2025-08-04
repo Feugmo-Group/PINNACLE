@@ -439,9 +439,8 @@ class PINNTrainer:
         total_loss = loss_dict['total']
         total_loss.backward()
 
-
         #gradient_clipping
-        torch.nn.utils.clip_grad_norm_(self.networks.get_all_parameters(), max_norm=1.0)
+        torch.nn.utils.clip_grad_norm_(self.networks.get_all_parameters(), max_norm=1.0) 
 
         if self.use_al:
             # Flip gradients for multipliers (ascent)
@@ -564,7 +563,7 @@ class PINNTrainer:
             import os
             save_path = os.path.join(os.getcwd(), f"worst_{self.config.experiment.name}", f"worst_points_step_{self.current_step:06d}.png")
             os.makedirs(os.path.dirname(save_path), exist_ok=True)
-            plot_top_k_worst(points_dict,residuals_dict,networks=self.networks,save_path=save_path)
+            plot_top_k_worst(points_dict,residuals_dict,networks=self.networks,physics=self.physics,save_path=save_path)
 
     def get_al_training_stats(self) -> Dict[str, Any]:
         """Get AL-specific training statistics"""
@@ -688,8 +687,7 @@ class PINNTrainer:
 
             # Update tracking
             self.update_loss_history(loss_dict)
-
-
+   
             if self.use_al and self.current_step % 10 == 0:  # Track every 10 steps to reduce overhead
                 self.track_l2_lambda()
 

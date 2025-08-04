@@ -242,7 +242,7 @@ class NetworkManager:
                 self.networks[net_name] = ResidualFFN(
                 input_dim=input_dim,
                 output_dim=1,
-                num_layers=arch_config[config_key]['hidden_layers'], #sort of fixing them to be the same, that is how many layers the residual net adds by design. 
+                num_layers=arch_config[config_key]['hidden_layers']-2, #sort of fixing them to be the same, that is how many layers the residual net adds by design. 
                 layer_size=arch_config[config_key]['layer_size'],
                 initialize_weights= self.config.networks.initialize
                 ).to(self.device)
