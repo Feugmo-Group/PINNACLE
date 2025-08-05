@@ -56,7 +56,8 @@ class FFN(nn.Module):
             hidden_layers: int = 5,
             layer_size: int = 20,
             activation: str = "swish",
-            initialize_weights: bool = False
+            initialize_weights: bool = False,
+            soft:bool = True
     ):
         super(FFN, self).__init__()
 
@@ -64,6 +65,7 @@ class FFN(nn.Module):
         self.output_dim = output_dim
         self.num_layers = hidden_layers
         self.layer_size = layer_size
+        self.soft = soft
 
         # Select activation function
         activation_map = {
@@ -93,7 +95,8 @@ class FFN(nn.Module):
         # Output layer
         self.output_layer = nn.Linear(self.layer_size, output_dim)
 
-        self.initialize_weights()
+        if initialize_weights:
+            self.initialize_weights()
     
     #TODO: Make this configurable via config so we can benchmark diff initializations
     def initialize_weights(self):
@@ -111,7 +114,10 @@ class FFN(nn.Module):
         for layer in self.hidden_layers: 
             x = self.activation(layer(x))
 
-        return self.output_layer(x)
+        if self.soft == True:
+            return torch.nn.functional.softplus(self.output_layer(x)) +1e-6
+        else:
+            return self.output_layer(x)
 
 
 class ResidualBlock(nn.Module):
@@ -235,7 +241,8 @@ class NetworkManager:
                     hidden_layers=arch_config[config_key]['hidden_layers'],
                     layer_size=arch_config[config_key]['layer_size'],
                     activation="swish",  # Can make this configurable too
-                    initialize_weights= self.config.networks.initialize
+                    initialize_weights= self.config.networks.initialize,
+                    soft=False if net_name == "potential" else True
                 ).to(self.device)
         else:
             for net_name, input_dim, config_key in network_specs:
