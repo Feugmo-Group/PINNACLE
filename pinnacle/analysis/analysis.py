@@ -573,7 +573,7 @@ def visualize_predictions(networks, physics, step: str = "final", save_path: Opt
         # Film growth at multiple non-steady state potentials
         
         # Select 5 representative potentials across the range
-        E_values_dimensional = [0.4, 1.0,1.2, 1.6,1.8]  # Representative voltages
+        E_values_dimensional = [0.1,0.4, 1.0, 1.6,1.8]  # Representative voltages
         E_hat_values = [E_val / physics.scales.phic for E_val in E_values_dimensional]
         colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', "#8b61b3"]  # Distinct colors
         
