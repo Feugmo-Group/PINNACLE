@@ -30,7 +30,7 @@ optimizer:
     amsgrad: False
 networks:
   type: "FFN"
-  initialize: True
+  initialize: True  # Initialize weights
 
 # Learning rate scheduler
 scheduler:
