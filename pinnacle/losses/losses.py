@@ -172,7 +172,8 @@ Tuple[torch.Tensor, Dict[str, torch.Tensor], torch.Tensor]]:
     u_mf_residual = ((physics.materials.eps_film * physics.scales.phic / physics.scales.lc * u_pred_mf_x) -
                      physics.materials.eps_Ddl * physics.scales.phic * (
                              u_pred_mf - E_mf / physics.scales.phic) / physics.geometry.d_Ddl)
-    u_mf_loss = torch.mean(u_mf_residual ** 2)
+    u_mf_loss = torch.mean(u_mf_residual ** 2) 
+
 
     # Film/solution interface conditions
     inputs_fs = torch.cat([x_fs, t_fs, E_fs], dim=1)
