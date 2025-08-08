@@ -242,7 +242,7 @@ class NetworkManager:
                     layer_size=arch_config[config_key]['layer_size'],
                     activation="swish",  # Can make this configurable too
                     initialize_weights= self.config.networks.initialize,
-                    soft=False if net_name == "potential" else True
+                    soft=False if net_name == "potential" or not(self.config.networks.soft) else True
                 ).to(self.device)
         else:
             for net_name, input_dim, config_key in network_specs:

@@ -569,7 +569,6 @@ def visualize_predictions(networks, physics, step: str = "final", save_path: Opt
         L_inputs_1d = torch.cat([t_hat_1d, E_hat_1d], dim=1)
         L_hat_1d = networks['film_thickness'](L_inputs_1d).squeeze()
 
-
         # Film growth at multiple non-steady state potentials
         
         # Select 5 representative potentials across the range
@@ -639,7 +638,7 @@ def visualize_predictions(networks, physics, step: str = "final", save_path: Opt
 
         # 6. Potential profile vs spatial position at fixed time
         x_hat_sweep = torch.linspace(0, L_hat_final, 50, device=physics.device)
-        t_hat_mid = torch.full((50, 1), 0.5, device=physics.device)  # Middle time
+        t_hat_mid = torch.full((50, 1), physics.domain.time_scale / (2 * physics.scales.tc), device=physics.device)  # Middle time, is now different
         E_hat_mid = torch.full((50, 1), E_hat_fixed.item(), device=physics.device)
 
         x_sweep_inputs = torch.cat([x_hat_sweep.unsqueeze(1), t_hat_mid, E_hat_mid], dim=1)
@@ -793,89 +792,291 @@ def generate_polarization_curve(networks, physics, t_hat_eval: float = 1.0, n_po
         plt.close()
 
 
-def plot_training_losses(loss_history: Dict[str, List[float]], save_path: Optional[str] = None) -> None:
+
+def smooth_loss_data(data: List[float], window_length: int = 51) -> List[float]:
     """
-    Create comprehensive plots of all loss components.
+    Apply moving average smoothing to loss data.
+    
+    Args:
+        data: Raw loss data
+        window_length: Length of the smoothing window
+    
+    Returns:
+        Smoothed data using moving average
+    """
+    return moving_average(data, window_length)
 
+def moving_average(data: List[float], window: int = 10) -> List[float]:
+    """Simple moving average smoothing as fallback."""
+    if window >= len(data):
+        return data
+    
+    smoothed = []
+    for i in range(len(data)):
+        start = max(0, i - window // 2)
+        end = min(len(data), i + window // 2 + 1)
+        smoothed.append(np.mean(data[start:end]))
+    
+    return smoothed
+
+def plot_training_losses(loss_history: Dict[str, List[float]], 
+                        save_path: Optional[str] = None,
+                        smooth: bool = True,
+                        smoothing_window: int = 50,
+                        separate_files: bool = True) -> None:
+    """
+    Create comprehensive plots of all loss components with optional smoothing.
+    
     **Loss Components Visualization:**
-
+    
     - **Main Categories**: Total, Interior (PDE), Boundary, Initial, Film Physics
-    - **PDE Breakdown**: Individual Nernst-Planck and Poisson residuals
+    - **PDE Breakdown**: Individual Nernst-Planck and Poisson residuals  
     - **Boundary Breakdown**: Metal/film and film/solution interface losses
     - **Initial Breakdown**: All initial condition components
-
+    
     Args:
         loss_history: Dictionary of loss histories from training
         save_path: Optional path to save plot
+        smooth: Whether to apply smoothing to the loss curves
+        smoothing_window: Window size for smoothing (must be odd)
+        separate_files: If True, create separate files for each plot type
     """
     print("📉 Creating comprehensive loss plots...")
+    if smooth:
+        print(f"🔧 Applying smoothing with window size {smoothing_window}")
+    
+    if separate_files:
+        _plot_separate_files(loss_history, save_path, smooth, smoothing_window)
+    else:
+        _plot_combined_subplots(loss_history, save_path, smooth, smoothing_window)
 
-    fig, axes = plt.subplots(2, 2, figsize=(15, 12))
 
-    # Total and main components
+def _plot_separate_files(loss_history: Dict[str, List[float]], 
+                        save_path: Optional[str] = None,
+                        smooth: bool = True,
+                        smoothing_window: int = 51) -> None:
+    """Create separate files for each loss component type."""
+    
+    # Helper function to plot with optional smoothing
+    def plot_loss(ax, data, label, color=None, linewidth=2, alpha=0.8):
+        if not data:
+            return
+            
+        if smooth:
+            # Plot raw data lightly in background
+            ax.semilogy(data, color='lightgray', alpha=0.3, linewidth=0.5)
+            # Plot smoothed data prominently
+            smoothed_data = smooth_loss_data(data, smoothing_window)
+            ax.semilogy(smoothed_data, label=f'{label}', 
+                       color=color, linewidth=linewidth, alpha=alpha)
+        else:
+            ax.semilogy(data, label=label, color=color, linewidth=linewidth, alpha=alpha)
+    
+    base_path = save_path.replace('.png', '') if save_path else None
+    suffix = "_smoothed" if smooth else ""
+    
+    # 1. Total Loss Only
+    fig, ax = plt.subplots(1, 1, figsize=(10, 6))
     if loss_history['total']:
-        axes[0, 0].semilogy(loss_history['total'], label='Total Loss', linewidth=2)
-        axes[0, 0].semilogy(loss_history['interior'], label='Interior (PDE)', alpha=0.8)
-        axes[0, 0].semilogy(loss_history['boundary'], label='Boundary', alpha=0.8)
-        axes[0, 0].semilogy(loss_history['initial'], label='Initial', alpha=0.8)
-        axes[0, 0].semilogy(loss_history['film_physics'], label='Film Thickness', alpha=0.8)
+        # Plot raw data in light blue
+        ax.semilogy(loss_history['total'], color='lightblue', alpha=0.3, linewidth=0.8, 
+                   label='Raw Total Loss')
+        
+        if smooth:
+            # Plot smoothed trend line in red
+            smoothed_data = smooth_loss_data(loss_history['total'], smoothing_window)
+            ax.semilogy(smoothed_data, color='red', linewidth=2.5, alpha=0.9,
+                       label='Smoothed Total Loss')
+        else:
+            ax.semilogy(loss_history['total'], label='Total Loss', 
+                       color='red', linewidth=2.5, alpha=0.9)
+    
+    ax.set_title('Total Training Loss', fontsize=14)
+    ax.set_xlabel('Training Step', fontsize=12)
+    ax.set_ylabel('Loss (log scale)', fontsize=12)
+    ax.legend(fontsize=10)
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+    
+    if base_path:
+        total_path = f"{base_path}_total_loss{suffix}.png"
+        os.makedirs(os.path.dirname(total_path), exist_ok=True)
+        plt.savefig(total_path, dpi=300, bbox_inches='tight')
+        print(f"  💾 Saved total loss to {total_path}")
+    plt.close()
+    
+    # 2. Main Components
+    fig, ax = plt.subplots(1, 1, figsize=(10, 6))
+    plot_loss(ax, loss_history['total'], 'Total Loss', linewidth=2.5)
+    plot_loss(ax, loss_history['interior'], 'Interior (PDE)')
+    plot_loss(ax, loss_history['boundary'], 'Boundary')
+    plot_loss(ax, loss_history['initial'], 'Initial')
+    plot_loss(ax, loss_history['film_physics'], 'Film Thickness')
+    
+    ax.set_title('Main Loss Components', fontsize=14)
+    ax.set_xlabel('Training Step', fontsize=12)
+    ax.set_ylabel('Loss (log scale)', fontsize=12)
+    ax.legend(fontsize=10)
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+    
+    if base_path:
+        main_path = f"{base_path}_main_components{suffix}.png"
+        plt.savefig(main_path, dpi=300, bbox_inches='tight')
+        print(f"  💾 Saved main components to {main_path}")
+    plt.close()
+    
+    # 3. PDE Residuals
+    fig, ax = plt.subplots(1, 1, figsize=(10, 6))
+    plot_loss(ax, loss_history.get('weighted_cv_pde', []), 'CV PDE')
+    plot_loss(ax, loss_history.get('weighted_av_pde', []), 'AV PDE')
+    plot_loss(ax, loss_history.get('weighted_h_pde', []), 'Hole PDE')
+    plot_loss(ax, loss_history.get('weighted_poisson_pde', []), 'Poisson PDE')
+    
+    ax.set_title('Individual PDE Residuals', fontsize=14)
+    ax.set_xlabel('Training Step', fontsize=12)
+    ax.set_ylabel('Loss (log scale)', fontsize=12)
+    ax.legend(fontsize=10)
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+    
+    if base_path:
+        pde_path = f"{base_path}_pde_residuals{suffix}.png"
+        plt.savefig(pde_path, dpi=300, bbox_inches='tight')
+        print(f"  💾 Saved PDE residuals to {pde_path}")
+    plt.close()
+    
+    # 4. Boundary Conditions
+    fig, ax = plt.subplots(1, 1, figsize=(10, 6))
+    plot_loss(ax, loss_history.get('weighted_cv_mf_bc', []), 'CV (m/f)')
+    plot_loss(ax, loss_history.get('weighted_av_mf_bc', []), 'AV (m/f)')
+    plot_loss(ax, loss_history.get('weighted_u_mf_bc', []), 'Potential (m/f)')
+    plot_loss(ax, loss_history.get('weighted_cv_fs_bc', []), 'CV (f/s)')
+    plot_loss(ax, loss_history.get('weighted_av_fs_bc', []), 'AV (f/s)')
+    plot_loss(ax, loss_history.get('weighted_u_fs_bc', []), 'Potential (f/s)')
+    plot_loss(ax, loss_history.get('weighted_h_fs_bc', []), 'Hole (f/s)')
+    
+    ax.set_title('Boundary Condition Losses', fontsize=14)
+    ax.set_xlabel('Training Step', fontsize=12)
+    ax.set_ylabel('Loss (log scale)', fontsize=12)
+    ax.legend(fontsize=10)
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+    
+    if base_path:
+        bc_path = f"{base_path}_boundary_conditions{suffix}.png"
+        plt.savefig(bc_path, dpi=300, bbox_inches='tight')
+        print(f"  💾 Saved boundary conditions to {bc_path}")
+    plt.close()
+    
+    # 5. Initial Conditions
+    fig, ax = plt.subplots(1, 1, figsize=(10, 6))
+    plot_loss(ax, loss_history.get('weighted_cv_ic', []), 'CV IC')
+    plot_loss(ax, loss_history.get('weighted_av_ic', []), 'AV IC')
+    plot_loss(ax, loss_history.get('weighted_h_ic', []), 'Hole IC')
+    plot_loss(ax, loss_history.get('weighted_poisson_ic', []), 'Poisson IC')
+    plot_loss(ax, loss_history.get('weighted_L_ic', []), 'Film Thickness IC')
+    
+    ax.set_title('Initial Condition Losses', fontsize=14)
+    ax.set_xlabel('Training Step', fontsize=12)
+    ax.set_ylabel('Loss (log scale)', fontsize=12)
+    ax.legend(fontsize=10)
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+    
+    if base_path:
+        ic_path = f"{base_path}_initial_conditions{suffix}.png"
+        plt.savefig(ic_path, dpi=300, bbox_inches='tight')
+        print(f"  💾 Saved initial conditions to {ic_path}")
+    plt.close()
+
+
+def _plot_combined_subplots(loss_history: Dict[str, List[float]], 
+                           save_path: Optional[str] = None,
+                           smooth: bool = True,
+                           smoothing_window: int = 51) -> None:
+    """Create the original combined subplot layout."""
+    
+    fig, axes = plt.subplots(2, 2, figsize=(15, 12))
+    
+    # Helper function to plot with optional smoothing
+    def plot_loss(ax, data, label, color=None, linewidth=2, alpha=0.8):
+        if not data:
+            return
+            
+        if smooth:
+            smoothed_data = smooth_loss_data(data, smoothing_window)
+            line = ax.semilogy(smoothed_data, label=f'{label}', 
+                             color=color, linewidth=linewidth, alpha=alpha)
+            ax.semilogy(data, color=line[0].get_color(), alpha=0.15, linewidth=0.5)
+        else:
+            ax.semilogy(data, label=label, color=color, linewidth=linewidth, alpha=alpha)
+    
+    # Total and main components
+    plot_loss(axes[0, 0], loss_history['total'], 'Total Loss', linewidth=2)
+    plot_loss(axes[0, 0], loss_history['interior'], 'Interior (PDE)')
+    plot_loss(axes[0, 0], loss_history['boundary'], 'Boundary')  
+    plot_loss(axes[0, 0], loss_history['initial'], 'Initial')
+    plot_loss(axes[0, 0], loss_history['film_physics'], 'Film Thickness')
+    
     axes[0, 0].set_title('Main Loss Components')
     axes[0, 0].set_xlabel('Training Step')
     axes[0, 0].set_ylabel('Loss (log scale)')
     axes[0, 0].legend()
     axes[0, 0].grid(True, alpha=0.3)
-
+    
     # PDE residuals breakdown
-    if loss_history['weighted_cv_pde']:
-        axes[0, 1].semilogy(loss_history['weighted_cv_pde'], label='CV PDE', alpha=0.8)
-        axes[0, 1].semilogy(loss_history['weighted_av_pde'], label='AV PDE', alpha=0.8)
-        axes[0, 1].semilogy(loss_history['weighted_h_pde'], label='Hole PDE', alpha=0.8)
-        axes[0, 1].semilogy(loss_history['weighted_poisson_pde'], label='Poisson PDE', alpha=0.8)
+    plot_loss(axes[0, 1], loss_history.get('weighted_cv_pde', []), 'CV PDE')
+    plot_loss(axes[0, 1], loss_history.get('weighted_av_pde', []), 'AV PDE')
+    plot_loss(axes[0, 1], loss_history.get('weighted_h_pde', []), 'Hole PDE')
+    plot_loss(axes[0, 1], loss_history.get('weighted_poisson_pde', []), 'Poisson PDE')
+    
     axes[0, 1].set_title('Individual PDE Residuals')
     axes[0, 1].set_xlabel('Training Step')
     axes[0, 1].set_ylabel('Loss (log scale)')
     axes[0, 1].legend()
     axes[0, 1].grid(True, alpha=0.3)
-
+    
     # Boundary conditions breakdown
-    if loss_history['weighted_cv_mf_bc']:
-        axes[1, 0].semilogy(loss_history['weighted_cv_mf_bc'], label='CV (m/f)', alpha=0.8)
-        axes[1, 0].semilogy(loss_history['weighted_av_mf_bc'], label='AV (m/f)', alpha=0.8)
-        axes[1, 0].semilogy(loss_history['weighted_u_mf_bc'], label='Potential (m/f)', alpha=0.8)
-        axes[1, 0].semilogy(loss_history['weighted_cv_fs_bc'], label='CV (f/s)', alpha=0.8)
-        axes[1, 0].semilogy(loss_history['weighted_av_fs_bc'], label='AV (f/s)', alpha=0.8)
-        axes[1, 0].semilogy(loss_history['weighted_u_fs_bc'], label='Potential (f/s)', alpha=0.8)
-        axes[1, 0].semilogy(loss_history['weighted_h_fs_bc'], label='Hole (f/s)', alpha=0.8)
+    plot_loss(axes[1, 0], loss_history.get('weighted_cv_mf_bc', []), 'CV (m/f)')
+    plot_loss(axes[1, 0], loss_history.get('weighted_av_mf_bc', []), 'AV (m/f)')
+    plot_loss(axes[1, 0], loss_history.get('weighted_u_mf_bc', []), 'Potential (m/f)')
+    plot_loss(axes[1, 0], loss_history.get('weighted_cv_fs_bc', []), 'CV (f/s)')
+    plot_loss(axes[1, 0], loss_history.get('weighted_av_fs_bc', []), 'AV (f/s)')
+    plot_loss(axes[1, 0], loss_history.get('weighted_u_fs_bc', []), 'Potential (f/s)')
+    plot_loss(axes[1, 0], loss_history.get('weighted_h_fs_bc', []), 'Hole (f/s)')
+    
     axes[1, 0].set_title('Boundary Condition Losses')
     axes[1, 0].set_xlabel('Training Step')
     axes[1, 0].set_ylabel('Loss (log scale)')
     axes[1, 0].legend()
     axes[1, 0].grid(True, alpha=0.3)
-
+    
     # Initial conditions breakdown
-    if loss_history['weighted_cv_ic']:
-        axes[1, 1].semilogy(loss_history['weighted_cv_ic'], label='CV IC', alpha=0.8)
-        axes[1, 1].semilogy(loss_history['weighted_av_ic'], label='AV IC', alpha=0.8)
-        axes[1, 1].semilogy(loss_history['weighted_h_ic'], label='Hole IC', alpha=0.8)
-        axes[1, 1].semilogy(loss_history['weighted_poisson_ic'], label='Poisson IC', alpha=0.8)
-        axes[1, 1].semilogy(loss_history['weighted_L_ic'], label='Film Thickness IC', alpha=0.8)
+    plot_loss(axes[1, 1], loss_history.get('weighted_cv_ic', []), 'CV IC')
+    plot_loss(axes[1, 1], loss_history.get('weighted_av_ic', []), 'AV IC')
+    plot_loss(axes[1, 1], loss_history.get('weighted_h_ic', []), 'Hole IC')
+    plot_loss(axes[1, 1], loss_history.get('weighted_poisson_ic', []), 'Poisson IC')
+    plot_loss(axes[1, 1], loss_history.get('weighted_L_ic', []), 'Film Thickness IC')
+    
     axes[1, 1].set_title('Initial Condition Losses')
     axes[1, 1].set_xlabel('Training Step')
     axes[1, 1].set_ylabel('Loss (log scale)')
     axes[1, 1].legend()
     axes[1, 1].grid(True, alpha=0.3)
-
+    
     plt.tight_layout()
-
+    
     if save_path:
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
-        plt.savefig(save_path, dpi=500, bbox_inches='tight')
-        print(f"  💾 Saved loss plots to {save_path}")
+        suffix = "_smoothed" if smooth else ""
+        final_path = save_path.replace('.png', f'{suffix}.png')
+        plt.savefig(final_path, dpi=500, bbox_inches='tight')
+        print(f"  💾 Saved loss plots to {final_path}")
     else:
         plt.show()
-
+    
     plt.close()
-
 def plot_al_multiplier_distributions(trainer: PINNTrainer, save_path: str = None):
     """Plot evolution of total Lagrange multiplier L2 norm (like paper Figure 3 right)"""
 

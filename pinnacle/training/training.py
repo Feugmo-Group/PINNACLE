@@ -484,7 +484,7 @@ class PINNTrainer:
 
     def print_progress(self, loss_dict: Dict[str, float]) -> None:
         """Print detailed training progress including weight information."""
-        if self.current_step % self.print_freq == 0:
+        if self.current_step % self.print_freq == 0 or self.current_step==0:
             print(f"\n=== Step {self.current_step} ===")
             if self.use_al:
                 # AL-specific reporting
