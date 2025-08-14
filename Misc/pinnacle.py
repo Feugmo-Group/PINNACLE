@@ -434,7 +434,7 @@ class Pinnacle():
             inputs = torch.cat([x, t,E], dim=1)
 
             # Initial Conditions for film thickness
-            L_initial_loss = self.cfg.weights.L_initial*torch.mean((L_initial_pred - self.L_initial)**2)
+            L_initial_loss = 0.01*torch.mean((L_initial_pred - self.L_initial)**2)
 
             # Cation Vacancy Initial Conditions
             log_cv_initial_pred = self.CV_net(inputs)
@@ -615,7 +615,7 @@ class Pinnacle():
             total_loss = ((1/self.cfg.batch_size.interior)*interior_loss + 
                         (1/self.cfg.batch_size.BC)*bc_loss + 
                         (1/self.cfg.batch_size.IC)*ic_loss+
-                        self.cfg.weights.L_physics*(1/self.cfg.batch_size.L)*L_physics_loss
+                        (1/self.cfg.batch_size.L)*(1/self.cfg.batch_size.L)*L_physics_loss
             )
 
 
@@ -625,7 +625,7 @@ class Pinnacle():
             'interior': (1/self.cfg.batch_size.interior)*interior_loss,
             'boundary': (1/self.cfg.batch_size.BC)*bc_loss,
             'initial': (1/self.cfg.batch_size.IC)*ic_loss,
-            'L_physics': self.cfg.weights.L_physics*(1/self.cfg.batch_size.L)*L_physics_loss,
+            'L_physics': (1/self.cfg.batch_size.L)*(1/self.cfg.batch_size.L)*L_physics_loss,
             # PDE losses
             'cv_pde': (1/self.cfg.batch_size.interior)*cv_pde_loss,
             'av_pde': (1/self.cfg.batch_size.interior)*av_pde_loss,
