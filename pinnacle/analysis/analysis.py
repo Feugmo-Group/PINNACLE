@@ -647,7 +647,7 @@ def visualize_predictions(networks, physics, step: str = "final", save_path: Opt
         axes[1, 2].plot(x_hat_sweep.cpu().numpy(), phi_vs_x, 'r-', linewidth=2)
         axes[1, 2].set_xlabel('Dimensionless Position x̂')
         axes[1, 2].set_ylabel('Dimensionless Potential φ̂')
-        axes[1, 2].set_title(f'Potential Profile φ̂(x̂) at t̂=0.5, Ê={E_hat_fixed.item():.3f}')
+        axes[1, 2].set_title(f'Potential Profile φ̂(x̂) at t̂={0.5* physics.domain.time_scale / physics.scales.tc:.3f}, Ê={E_hat_fixed.item():.3f}')
         axes[1, 2].grid(True, alpha=0.3)
 
         plt.suptitle(f'Dimensionless Network Predictions Overview - Step {step}', fontsize=16)
@@ -683,7 +683,7 @@ def visualize_predictions(networks, physics, step: str = "final", save_path: Opt
         print(f"Potential scale: {physics.scales.phic:.3f} V")
         print(f"Final dimensional thickness: {L_hat_np.max() * physics.scales.lc * 1e9:.2f} nm")
 
-def generate_polarization_curve(networks, physics, t_hat_eval: float = 1.0, n_points: int = 50,
+def generate_polarization_curve(networks, physics, n_points: int = 50,
                                 save_path: Optional[str] = None) -> Tuple[np.ndarray, np.ndarray, float]:
     """ 
      Generate polarization curve at specified time.
@@ -711,13 +711,15 @@ def generate_polarization_curve(networks, physics, t_hat_eval: float = 1.0, n_po
         Tuple of (E_hat_values, I_hat_values, I_c_scale)
     """
 
-    print(f"📈 Generating polarization curve at t̂={t_hat_eval}")
+    
 
     # Define potential range
     E_hat_min = physics.geometry.E_min/physics.scales.phic 
     E_hat_max = physics.geometry.E_max/physics.scales.phic
     t_hat_eval = physics.domain.time_scale / physics.scales.tc
 
+    
+    print(f"📈 Generating polarization curve at t̂={t_hat_eval}")
     with torch.no_grad():
         E_hat_values = torch.linspace(E_hat_min, E_hat_max, n_points, device=physics.device)
         j={'total':[],'j1':[],'j2':[],'j3':[],'jtp':[]}
@@ -785,7 +787,7 @@ def generate_polarization_curve(networks, physics, t_hat_eval: float = 1.0, n_po
         if save_path:
             os.makedirs(os.path.dirname(save_path), exist_ok=True)
             plt.savefig(save_path, dpi=300, bbox_inches='tight')
-            print(f"  💾 Saved polarization curve to {save_path}")
+            (f"  💾 Saved polarization curve to {save_path}")
         else:
             plt.show()
 
