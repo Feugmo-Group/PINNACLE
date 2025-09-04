@@ -30,7 +30,7 @@ optimizer:
     amsgrad: False
 networks:
   type: "FFN"
-  initialize: True  # Initialize weights
+  initialize: False  # Initialize weights
   soft: True  # Use soft initialization
 
 # Learning rate scheduler
@@ -85,7 +85,7 @@ training:
   rec_results_freq: 100
   rec_inference_freq: 1000
   save_network_freq: 1000
-  weight_strat: "AL"
+  weight_strat: "batch_size"
   ntk_update_freq: 100
   ntk_start_step: 0
   ntk_steps: 7500
@@ -194,7 +194,7 @@ pde:
 
 domain:
   time:
-    time_scale: 900000  # Time scale for the simulation [s]
+    time_scale: 3600  # Time scale for the simulation [s]
   initial:
     L_initial: 1e-9 # Initial film thickness [m]
 

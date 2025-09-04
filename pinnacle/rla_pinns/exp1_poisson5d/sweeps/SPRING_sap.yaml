@@ -1,0 +1,43 @@
+entity: rla-pinns
+project: exp1_poisson5d
+name: SPRING_exact
+program: ../../train.py
+command:
+    - ${env}
+    - python
+    - ${program}
+    - "--wandb"
+    - "--optimizer=RNGD"
+    - ${args_no_boolean_flags}
+metric:
+    goal: minimize
+    name: l2_error
+method: random
+parameters:
+    batch_frequency:
+        value: 1
+    boundary_condition:
+        value: cos_sum
+    model:
+        value: mlp-tanh-64-64-48-48
+    num_seconds:
+        value: 7_000
+    dim_Omega:
+        value: 5
+    N_Omega:
+        value: 3_000
+    N_dOmega:
+        value: 500
+    RNGD_approximation:
+        value: "sap"
+    RNGD_damping:
+        distribution: log_uniform_values
+        min: 1e-5
+        max: 1.0
+    RNGD_momentum:
+        distribution: uniform
+        min: 0.8
+        max: 0.9999
+    RNGD_rank_val:
+        distribution: categorical
+        values: [50, 150, 350, 700]

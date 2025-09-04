@@ -1,0 +1,44 @@
+entity: rla-pinns
+project: exp2_poisson10d
+name: ENGD_nystrom
+program: ../../train.py
+command:
+    - ${env}
+    - python
+    - ${program}
+    - "--wandb"
+    - "--optimizer=RNGD"
+    - ${args_no_boolean_flags}
+metric:
+    goal: minimize
+    name: l2_error
+method: random
+parameters:
+    batch_frequency:
+        value: 1
+    boundary_condition:
+        value: u_weinan
+    model:
+        value: mlp-tanh-256-256-128-128
+    num_seconds:
+        value: 7_000
+    dim_Omega:
+        value: 10
+    N_Omega:
+        value: 3000
+    N_dOmega:
+        value: 500
+    RNGD_approximation:
+        value: "nystrom"
+    RNGD_damping:
+        distribution: log_uniform_values
+        min: 1e-5
+        max: 1e-1
+    RNGD_momentum:
+        value: 0.0
+    RNGD_norm_constraint:
+        value: 0.0
+    RNGD_rank_val:
+        value: 1750
+    equation:
+        value: "poisson"

@@ -1,0 +1,39 @@
+entity: rla-pinns
+project: exp3_effectivedim
+name: ENGD_woodbury
+program: ../../train.py
+command:
+    - ${env}
+    - python
+    - ${program}
+    - "--wandb"
+    - "--save_checkpoints"
+    - "--optimizer=RNGD"
+    - ${args_no_boolean_flags}
+metric:
+    goal: minimize
+    name: l2_error
+method: random
+parameters:
+    num_steps:
+        value: 1_000
+    max_logs:
+        value: 20
+    batch_frequency:
+        value: 1
+    boundary_condition:
+        value: cos_sum
+    model:
+        value: mlp-tanh-64-64-48-48
+    num_seconds:
+        value: 0
+    dim_Omega:
+        value: 5
+    N_Omega:
+        value: 3_000
+    N_dOmega:
+        value: 500
+    RNGD_approximation:
+        value: "exact"
+    RNGD_damping:
+        value: 0.0000000000031732123

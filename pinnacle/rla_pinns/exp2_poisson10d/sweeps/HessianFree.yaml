@@ -1,0 +1,43 @@
+entity: rla-pinns
+project: exp2_poisson10d
+name: HessianFree
+program: ../../train.py
+command:
+    - ${env}
+    - python
+    - ${program}
+    - "--wandb"
+    - "--optimizer=HessianFree"
+    - ${args_no_boolean_flags}
+metric:
+    goal: minimize
+    name: l2_error
+method: random
+parameters:
+    batch_frequency:
+        value: 1
+    boundary_condition:
+        value: u_weinan
+    model:
+        value: mlp-tanh-256-256-128-128
+    num_seconds:
+        value: 7_000
+    dim_Omega:
+        value: 10
+    N_Omega:
+        value: 3000
+    N_dOmega:
+        value: 500
+    HessianFree_curvature_opt:
+        distribution: categorical
+        values: ["ggn"]
+    HessianFree_damping:
+        distribution: log_uniform_values
+        min: 1e-5
+        max: 1e2
+    HessianFree_no_adapt_damping:
+        distribution: categorical
+        values: [false]
+    HessianFree_cg_max_iter:
+        distribution: categorical
+        values: [100, 150, 200, 250, 300, 350]
