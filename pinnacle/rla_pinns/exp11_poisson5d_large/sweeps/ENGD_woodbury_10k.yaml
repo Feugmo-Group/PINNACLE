@@ -1,0 +1,37 @@
+entity: rla-pinns
+project: exp11_poisson5d_large
+name: ENGD_woodbury_10k
+program: ../../train.py
+command:
+    - ${env}
+    - python
+    - ${program}
+    - "--wandb"
+    - "--save_checkpoints"
+    - "--optimizer=RNGD"
+    - ${args_no_boolean_flags}
+metric:
+    goal: minimize
+    name: l2_error
+method: random
+parameters:
+    batch_frequency:
+        value: 1
+    boundary_condition:
+        value: cos_sum
+    model:
+        value: mlp-tanh-64-64-48-48
+    num_seconds:
+        value: 7_000
+    dim_Omega:
+        value: 5
+    N_Omega:
+        value: 8_000
+    N_dOmega:
+        value: 2_000
+    RNGD_approximation:
+        value: "exact"
+    RNGD_damping:
+        distribution: log_uniform_values
+        min: 1e-15
+        max: 1e-5

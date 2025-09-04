@@ -3,7 +3,7 @@
 Main execution script for PINNACLE.
 
 Simple script to demonstrate the complete workflow:
-networks → physics → sampling → training → analysis
+networks → physics → sampling → training → analysis 
 """
 import torch
 import hydra

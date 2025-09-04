@@ -1,0 +1,38 @@
+entity: rla-pinns
+project: exp7_poisson100d_largebatch
+name: ENGD_woodbury
+program: ../../train.py
+command:
+    - ${env}
+    - python
+    - ${program}
+    - "--wandb"
+    - "--optimizer=RNGD"
+    - ${args_no_boolean_flags}
+metric:
+    goal: minimize
+    name: l2_error
+method: random
+parameters:
+    batch_frequency:
+        value: 1
+    boundary_condition:
+        value: u_weinan_norm
+    model:
+        value: mlp-tanh-768-768-512-512
+    num_seconds:
+        value: 7_000
+    dim_Omega:
+        value: 100
+    N_Omega:
+        value: 500 
+    N_dOmega:
+        value: 125
+    RNGD_approximation:
+        value: "exact"
+    RNGD_damping:
+        distribution: log_uniform_values
+        min: 1e-10
+        max: 1e-1
+    equation:
+        value: "poisson"

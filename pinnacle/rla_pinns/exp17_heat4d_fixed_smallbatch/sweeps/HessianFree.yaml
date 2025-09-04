@@ -1,0 +1,44 @@
+entity: rla-pinns
+project: exp14_heat10d
+name: HessianFree
+program: ../../train.py
+command:
+    - ${env}
+    - python
+    - ${program}
+    - "--wandb"
+    - "--optimizer=HessianFree"
+    - ${args_no_boolean_flags}
+metric:
+    goal: minimize
+    name: l2_error
+method: grid
+parameters:
+    batch_frequency:
+        value: 1
+    boundary_condition:
+        value: sin_sum
+    model:
+        value: mlp-tanh-256-256-128-128
+    num_seconds:
+        value: 7_000
+    dim_Omega:
+        value: 10
+    N_Omega:
+        value: 100
+    N_dOmega:
+        value: 50
+    HessianFree_curvature_opt:
+        distribution: categorical
+        values: ["ggn"]
+    HessianFree_damping:
+        distribution: categorical
+        values: [100, 50, 10, 5, 1.0, 5e-1, 1e-1, 5e-2]
+    HessianFree_no_adapt_damping:
+        distribution: categorical
+        values: [false]
+    HessianFree_cg_max_iter:
+        distribution: categorical
+        values: [100, 150, 200, 250, 300, 350]
+    equation:
+        value: "heat"

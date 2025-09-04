@@ -2,7 +2,65 @@
 """
 Analysis and visualization functions for PINNACLE.
 
-Simple functional approach to generate plots and analyze PINN results.
+Simple functional approach to generate plots and analyze PINN results. Includes specific methods for NTK and AL weighting. 
+
+Functions
+-----------
+get_weights
+    Takes a networks object defined in the networks module and returns a list of total parameters
+get_all_parameters
+    Takes a networks object defined in the networks module and returns a list of total parameters
+set_weights
+    Modifies the weights of a given network along a single layer
+get_random_weights
+    Produce a random direction to perturb the network weights, returns a list of Gaussian sampled tensors
+get_diff_weights
+    Produce a vector that goes from input1 to input2
+normalize_direction
+    Apply one of five normalization techniques on a random weight vector to get a directional perturbation
+normalize_directions_for_weight
+    Scale the direction entries corresponding to the random perturbation in the weight matrices
+ignore_biasbn
+    Set bias and bn parameters in perturbation to 0 
+create_random_direction
+    Utilize above helper functions to return a randomized direction vector for given weights
+create_loss_landscape
+    Generate a 2D loss landscape visualization around the current trained model parameters
+plot_ntk_weight_densities
+     Plot density distributions of NTK weights for each loss component
+plot_top_k_worst
+    Plot top k worst points (highest residuals) for any sampling method
+visualize_predictions 
+    Visualize network predictions across input ranges
+generate_polarization_curve
+    Generate polarization curve at specified time
+smooth_loss_data
+    Apply moving average to loss data for a smoother plot
+moving_average  
+    Helper function for computing moving average
+plot_training_losses    
+    Plot training losses into combined subplot or different png per component
+_plot_separate_files
+    Helper component called for seperate file plotting
+_plot_combined_subplots
+    Helper component called for combined subplot plotting
+plot_potential_profiles
+    Plot potential across domain at varying times
+analyze_training_results
+    Grouped function called in main.py to analyze PINN results
+    
+Examples
+-----------
+Base Usage Examples
+
+from analysis.analysis import analyze_training_results
+analyze_training_results(trainer, NTKWeights,save_dir= somehwere\in\your\pc)
+
+Alternatively 
+from analysis.anaylsis import generate_polarization_curve
+generate_polarization_curve(networks, physics, n_points = 50, save_path = maybe/on/a/server)
+ 
+
 """
 
 import torch
@@ -23,7 +81,40 @@ from tqdm import tqdm
 from scipy.stats import gaussian_kde
 
 def get_weights(networks: Dict[str,nn.Module]) -> list:
-    """Extract parameters from all networks and concatenate into a big list"""
+    """Extract parameters from all networks and concatenate into a big list
+    
+    Parameters
+    ----------
+    
+    networks: Dict[str, nn.Module]
+            Dictionary containing neural networks for each variable:
+            - 'phi': Electric potential network
+            - 'c_cv': Cation vacancy concentration network  
+            - 'c_av': Anion vacancy concentration network
+    
+    Returns
+    -------
+    torch.Tensor
+        Concatenated list of all network weights, shape will depend on number of networks and architecture. An example of our shape is given
+        [
+        # Potential network parameters
+        tensor([3, 20]),    # input layer weights
+        tensor([20]),       # input layer biases  
+        tensor([20, 20]),   # hidden layer 1 weights
+        tensor([20]),       # hidden layer 1 biases
+        # ... (4 more hidden layers)
+        tensor([20, 1]),    # output layer weights
+        tensor([1]),        # output layer bias
+        
+        # CV network parameters (same structure)
+        # AV network parameters (same structure) 
+        # Hole network parameters (same structure)
+        
+        # Film thickness network parameters
+        tensor([2, 20]),    # input layer (only difference: 2 inputs)
+        # ... rest same as above
+    ]
+    """
     param_list = []
     for key in networks.keys():
         param_list.extend([p.data for p in networks[key].parameters()])
@@ -31,6 +122,40 @@ def get_weights(networks: Dict[str,nn.Module]) -> list:
 
 
 def get_all_parameters(networks: Dict[str,nn.Module]) -> list:
+    """Extract parameters from all networks and concatenate into a big list
+    
+    Parameters
+    ----------
+    
+    networks: Dict[str, nn.Module]
+            Dictionary containing neural networks for each variable:
+            - 'phi': Electric potential network
+            - 'c_cv': Cation vacancy concentration network  
+            - 'c_av': Anion vacancy concentration network
+    
+    Returns
+    -------
+    torch.Tensor
+        Concatenated list of all network weights, shape will depend on number of networks and architecture. An example of our shape is given
+        [
+        # Potential network parameters
+        tensor([3, 20]),    # input layer weights
+        tensor([20]),       # input layer biases  
+        tensor([20, 20]),   # hidden layer 1 weights
+        tensor([20]),       # hidden layer 1 biases
+        # ... (4 more hidden layers)
+        tensor([20, 1]),    # output layer weights
+        tensor([1]),        # output layer bias
+        
+        # CV network parameters (same structure)
+        # AV network parameters (same structure) 
+        # Hole network parameters (same structure)
+        
+        # Film thickness network parameters
+        tensor([2, 20]),    # input layer (only difference: 2 inputs)
+        # ... rest same as above
+    ]
+    """
     param_list = []
     for key in networks.keys():
         param_list.extend(networks[key].parameters())
@@ -40,6 +165,29 @@ def set_weights(networks: Dict[str,nn.Module], weights:Dict[str, Dict[str, torch
     """
         Overwrite the network's weights with a specified list of tensors
         or change weights along directions with a step size.
+
+        Parameters
+        ----------
+        networks: Dict[str, nn.Module]
+            Dictionary containing neural networks for each variable:
+            - 'phi': Electric potential network
+            - 'c_cv': Cation vacancy concentration network
+            - 'c_av': Anion vacancy concentration network
+            etc.
+        weights: Dict[str, Dict[str, torch.Tensor]]
+            Dictionary of weight tensors for each network and layer.
+        device: torch.device
+            Device the weights are on (CPU or GPU).
+        directions: torch.Tensor, optional
+            List of direction tensors to perturb weights.
+            If None, weights are not perturbed
+        step: torch.Tensor, optional
+            Step size(s) for perturbation along directions.
+            If None, weights are not perturbed
+        
+        Returns
+        -------
+        None
     """
     if directions is None:
         # You cannot specify a step length without a direction.
@@ -59,25 +207,56 @@ def set_weights(networks: Dict[str,nn.Module], weights:Dict[str, Dict[str, torch
             p.data = w.to(device=device, dtype=w.dtype) + torch.as_tensor(d, device=device, dtype=w.dtype)
         
 
-def get_random_weights(weights:Dict[str, Dict[str, torch.Tensor]],device:torch.device = None ):
+def get_random_weights(weights:Dict[str, Dict[str, torch.Tensor]],device:torch.device = None ) -> List[torch.Tensor]:
     """
         Produce a random direction that is a list of random Gaussian tensors
         with the same shape as the network's weights, so one direction entry per weight.
+
+        Parameters 
+        ----------
+        weights: Dict[str, Dict[str, torch.Tensor]]
+            Dictionary of weight tensors for each network and layer.
+        device: torch.device
+            Device the weights are on (CPU or GPU).
+        Returns
+        -------
+        List[torch.Tensor]
+            List of random Gaussian tensors with the same shape as weights.
     """
     return [torch.randn(w.size(),device=device) for w in weights]
 
-def get_diff_weights(weights:Dict[str, Dict[str, torch.Tensor]], weights2:Dict[str, Dict[str, torch.Tensor]]):
-    """ Produce a direction from 'weights' to 'weights2'."""
+def get_diff_weights(weights:Dict[str, Dict[str, torch.Tensor]], weights2:Dict[str, Dict[str, torch.Tensor]]) -> List[torch.Tensor]:
+    """ Produce a direction from 'weights' to 'weights2'
+
+        Parameters  
+        ----------
+        weights: Dict[str, Dict[str, torch.Tensor]]
+            Dictionary of weight tensors for a network and layer.
+        weights2: Dict[str, Dict[str, torch.Tensor]]
+            Different dictionary of weight tensors for a different network and layer.
+
+        Returns
+        -------
+        List[torch.Tensor]
+            List of tensors representing the difference from weights to weights2.
+    """
     return [w2 - w for (w, w2) in zip(weights, weights2)]
 
-def normalize_direction(direction:torch.Tensor, weights, norm='filter'):
+def normalize_direction(direction:torch.Tensor, weights:Dict[str, Dict[str, torch.Tensor]], norm='filter')-> None:
     """
         Rescale the direction so that it has similar norm as their corresponding
         model in different levels.
-        Args:
-          direction: a variables of the random direction for one layer
-          weights: a variable of the original model for one layer
-          norm: normalization method, 'filter' | 'layer' | 'weight'
+        Parameters
+        ----------
+          direction:torch.Tensor
+            Random direction of the random direction for one layer
+          weights:Dict[str, Dict[str, torch.Tensor]]
+             Weights of the original model for one layer
+          norm: str
+            normalization method, 'filter' | 'layer' | 'weight'
+        Returns
+        -------
+        None    
     """
     if norm == 'filter':
         # Rescale the filters (weights in group) in 'direction' so that each
@@ -103,9 +282,10 @@ def normalize_direction(direction:torch.Tensor, weights, norm='filter'):
         direction.div_(direction.norm())
 
 
-def normalize_directions_for_weights(direction:torch.Tensor, weights:Dict[str, Dict[str, torch.Tensor]], norm='filter', ignore='biasbn'):
+def normalize_directions_for_weights(direction:torch.Tensor, weights:Dict[str, Dict[str, torch.Tensor]], norm='filter', ignore='biasbn') -> None:
     """
-        The normalization scales the direction entries according to the entries of weights.
+        Normalization that scales the direction entries according to the entries of weights
+        
     """
     assert(len(direction) == len(weights))
     for d, w in zip(direction, weights):
@@ -1114,6 +1294,92 @@ def plot_al_multiplier_distributions(trainer: PINNTrainer, save_path: str = None
         plt.savefig(f"{save_path}/al_multiplier_l2_evolution.png", dpi=300, bbox_inches='tight')
         print(f"💾 Saved AL multiplier L2 evolution to {save_path}")
     plt.close()
+    
+def plot_potential_profiles(networks, physics,save_path = None):
+    """Plot potential vs position at different times"""
+    
+    with torch.no_grad():
+        # Fixed dimensionless potential for comparison
+        E_hat_fixed = torch.tensor([[0.8 / physics.scales.phic]], device=physics.device)
+        
+        # Three dimensionless time points: initial, middle, final
+        t_hat_final = physics.domain.time_scale / physics.scales.tc  # Convert to dimensionless
+        times_hat = [0.0, t_hat_final/2, t_hat_final]
+        # Convert to dimensional for labels to match original format
+        times_dimensional = [t * physics.scales.tc for t in times_hat]
+        time_labels = ["t=0 (initial)", f"t={times_dimensional[1]:.0f}s (middle)", f"t={times_dimensional[2]:.0f}s (final)"]
+        
+        plt.figure(figsize=(12, 8))
+        
+        for i, (t_hat_val, label) in enumerate(zip(times_hat, time_labels)):
+            # Get dimensionless film thickness at this time
+            t_hat_tensor = torch.tensor([[t_hat_val]], device=physics.device)
+            L_hat_inputs = torch.cat([t_hat_tensor, E_hat_fixed], dim=1)
+            L_hat_current = networks['film_thickness'](L_hat_inputs)
+            L_hat_val = L_hat_current.item()
+            
+            # Create dimensionless spatial grid from 0 to L_hat
+            n_points = 100
+            x_hat_vals = torch.linspace(0, 3.0, n_points).to(physics.device)
+            t_hat_vals = torch.full((n_points, 1), t_hat_val, device=physics.device)
+            E_hat_vals = torch.full((n_points, 1), E_hat_fixed.item(), device=physics.device)
+            
+            # Get dimensionless potential predictions
+            inputs = torch.cat([x_hat_vals.unsqueeze(1), t_hat_vals, E_hat_vals], dim=1)
+            phi_hat_vals = networks['potential'](inputs)
+            
+            # Convert to dimensional units for plotting (to match original format)
+            x_np = x_hat_vals.cpu().numpy() * physics.scales.lc * 1e9  # Convert to nm
+            u_np = phi_hat_vals.squeeze().cpu().numpy() * physics.scales.phic  # Convert to V
+            L_val = L_hat_val * physics.scales.lc * 1e9  # Convert to nm
+            
+            # Plot
+            plt.subplot(2, 2, i+1)
+            plt.plot(x_np, u_np, 'b-', linewidth=2, label="Potential")
+            plt.xlabel('Position [nm]')
+            plt.ylabel('Potential [V]')
+            plt.title(f'{label} (L={L_val:.1f} nm)')
+            plt.legend()
+            plt.grid(True, alpha=0.3)
+            
+            # Print interface values (match original format)
+            u_at_0 = u_np[0]
+            u_at_L = u_np[-1]
+            print(f"{label}: u(0)={u_at_0:.4f}V, u(L)={u_at_L:.4f}V, drop={u_at_0-u_at_L:.4f}V")
+        
+        # Fourth subplot: Compare all three times
+        plt.subplot(2, 2, 4)
+        for i, (t_hat_val, label) in enumerate(zip(times_hat, time_labels)):
+            t_hat_tensor = torch.tensor([[t_hat_val]], device=physics.device)
+            L_hat_inputs = torch.cat([t_hat_tensor, E_hat_fixed], dim=1)
+            L_hat_current = networks['film_thickness'](L_hat_inputs)
+            L_hat_val = L_hat_current.item()
+            
+            x_hat_vals = torch.linspace(0, 3.0, 100).to(physics.device)
+            t_hat_vals = torch.full((100, 1), t_hat_val, device=physics.device)
+            E_hat_vals = torch.full((100, 1), E_hat_fixed.item(), device=physics.device)
+            
+            inputs = torch.cat([x_hat_vals.unsqueeze(1), t_hat_vals, E_hat_vals], dim=1)
+            phi_hat_vals = networks['potential'](inputs)
+            
+            x_np = x_hat_vals.cpu().numpy() * physics.scales.lc * 1e9
+            u_np = phi_hat_vals.squeeze().cpu().numpy() * physics.scales.phic
+            
+            plt.plot(x_np, u_np, linewidth=2, label=label)
+        
+        plt.xlabel('Position [nm]')
+        plt.ylabel('Potential [V]')
+        plt.title('Potential Evolution Over Time')
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        if save_path:
+            plt.savefig(f"{save_path}/potential_profiles.png", dpi=300, bbox_inches='tight')
+        plt.close()
+
+
+
 
 def analyze_training_results(trainer:PINNTrainer, ntk_weight_manager:NTKWeightManager,save_dir: Optional[str] = None) -> None:
     """
@@ -1156,6 +1422,8 @@ def analyze_training_results(trainer:PINNTrainer, ntk_weight_manager:NTKWeightMa
     # Visualize predictions
     visualize_predictions(trainer.networks, trainer.physics, step="final", save_path=predictions_plot_path)
 
+
+    plot_potential_profiles(trainer.networks,trainer.physics,save_path=save_dir)
     # Generate polarization curve
     generate_polarization_curve(trainer.networks, trainer.physics, save_path=polarization_plot_path)
 
