@@ -622,7 +622,7 @@ class PINNTrainer:
         Args:
             checkpoint_path: Path to checkpoint file
         """
-        checkpoint = torch.load(checkpoint_path, map_location=self.device)
+        checkpoint = torch.load(checkpoint_path, map_location=self.device,weights_only=False)
 
         self.networks.load_state_dict(checkpoint['networks'])
         self.optimizer.load_state_dict(checkpoint['optimizer'])

@@ -29,7 +29,7 @@ def load_and_analyze(checkpoint_path, config_path, output_dir=None):
     trainer.load_checkpoint(checkpoint_path)
     
     # Load checkpoint data for stats
-    checkpoint = torch.load(checkpoint_path, map_location=device)
+    checkpoint = torch.load(checkpoint_path, map_location=device,weights_only=False)
     
     # Run analysis (minimal version to avoid stats errors)
     plots_dir = os.path.join(output_dir, "plots")
