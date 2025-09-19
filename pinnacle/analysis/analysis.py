@@ -1294,6 +1294,51 @@ def plot_al_multiplier_distributions(trainer: PINNTrainer, save_path: str = None
         plt.savefig(f"{save_path}/al_multiplier_l2_evolution.png", dpi=300, bbox_inches='tight')
         print(f"💾 Saved AL multiplier L2 evolution to {save_path}")
     plt.close()
+
+def potential_investigations(networks, physics, config, save_path: Optional[str] = None):
+     """Investigate phi mf and phi fs for varying applied potentials"""
+    
+     with torch.no_grad():
+        E_list = [0.1,0.4,0.6,0.8,1.0,1.2,1.4,1.6,1.8]  # Applied potentials in V
+        E_no_dim = torch.tensor(E_list, device=physics.device).unsqueeze(1)/physics.scales.phic
+        t_hat_fixed = torch.tensor([[physics.domain.time_scale /physics.scales.tc]], device=physics.device)  # Final time in dimensionless units
+        inputs = torch.cat([t_hat_fixed.repeat(len(E_list),1), E_no_dim], dim=1)
+        L_hat_vals = networks['film_thickness'](inputs).squeeze().cpu().numpy()
+        phi_mf_list = []
+        phi_fs_list = []
+        for E_hat_val in E_no_dim:
+            x_hat_mf = torch.tensor([[0.0]], device=physics.device)  # m/f interface
+            x_hat_fs = networks['film_thickness'](torch.cat([t_hat_fixed, E_hat_val.unsqueeze(0)], dim=1))  # f/s interface
+            
+            input_mf = torch.cat([x_hat_mf, t_hat_fixed, E_hat_val.unsqueeze(0)], dim=1)
+            input_fs = torch.cat([x_hat_fs, t_hat_fixed, E_hat_val.unsqueeze(0)], dim=1)
+            
+            phi_mf = networks['potential'](input_mf).item() * physics.scales.phic  # Dimensional potential at m/f
+            phi_fs = networks['potential'](input_fs).item() * physics.scales.phic  # Dimensional potential at f/s
+            
+            phi_mf_list.append(phi_mf)
+            phi_fs_list.append(phi_fs)
+        
+        # Convert to numpy for plotting
+        E_np = E_no_dim.cpu().numpy() * physics.scales.phic
+        phi_mf_np = np.array(phi_mf_list)
+        phi_fs_np = np.array(phi_fs_list)
+        L_np = L_hat_vals * physics.scales.lc * 1e9
+
+        # Create plots
+        plt.figure(figsize=(12, 5))
+        plt.subplot(1, 2, 1)
+        plt.plot(E_np, phi_mf_np, 'b-o', label='φ_mf', linewidth=2)
+        plt.plot(E_np, phi_fs_np, 'r-o', label='φ_fs', linewidth=2)
+        plt.plot(E_np, E_np, 'k--', label='φ=E', linewidth=1)
+        plt.xlabel('Applied Potential E [V]')
+        plt.ylabel('Interface Potentials [V]')
+        plt.title('Interface Potentials vs Applied Potential')
+        plt.legend()
+        plt.grid(True, alpha=0.3)   
+
+        plt.savefig(f"{save_path}/interface_potentials.png", dpi=300, bbox_inches='tight')
+
     
 def plot_potential_profiles(networks, physics,save_path = None):
     """Plot potential vs position at different times"""

@@ -267,11 +267,12 @@ class PINNTrainer:
             x_boundary, t_boundary, E_boundary = self.sampler.sample_boundary_points(self.networks)
             x_initial, t_initial, E_initial = self.sampler.sample_initial_points(self.networks)
             t_film, E_film = self.sampler.sample_film_physics_points()
+            fem_data = self.sampler.sample_fem_data(self.config.hybrid.fem_batch_size)
 
             return (x_interior, t_interior, E_interior,
                 x_boundary, t_boundary, E_boundary,
                 x_initial, t_initial, E_initial,
-                t_film, E_film)
+                t_film, E_film,fem_data)
 
         elif self.config.sampling.strat == "Adaptive":
             # Purely adaptive sampling - no regular sampling
@@ -328,7 +329,8 @@ class PINNTrainer:
         (x_interior, t_interior, E_interior,
          x_boundary, t_boundary, E_boundary,
          x_initial, t_initial, E_initial,
-         t_film, E_film) = self.sample_training_points()
+         t_film, E_film,fem_data) = self.sample_training_points()
+        
 
         if self.use_al:
             loss_dict, _, constraint_violations = compute_total_loss_al(
@@ -357,10 +359,10 @@ class PINNTrainer:
                 x_interior, t_interior, E_interior,
                 x_boundary, t_boundary, E_boundary,
                 x_initial, t_initial, E_initial,
-                t_film, E_film,
+                t_film, E_film,fem_data,
                 self.networks, self.physics,
                 weights=None,  # Don't use standard weights
-                ntk_weights=self.ntk_weights  # Use NTK component weights
+                ntk_weights=self.ntk_weights,Hybrid=self.config.hybrid.use_data  # Use NTK component weights
             )
         else:
             # Use standard weights (uniform, batch_size, manual)
@@ -371,7 +373,7 @@ class PINNTrainer:
                 t_film, E_film,
                 self.networks, self.physics,
                 weights=self.loss_weights,
-                ntk_weights=None
+                ntk_weights=None,Hybrid=self.config.hybrid.use_data  # Use standard weights
             )
 
         return loss_dict
@@ -541,6 +543,9 @@ class PINNTrainer:
                 print("\nPDE Residuals:")
                 print(f"  CV: {loss_dict['weighted_cv_pde']:.6f} | AV: {loss_dict['weighted_av_pde']:.6f}")
                 print(f"  Hole: {loss_dict['weighted_h_pde']:.6f} | Poisson: {loss_dict['weighted_poisson_pde']:.6f}")
+
+            if "data_loss" in loss_dict:
+                print(f"\nData Loss: {loss_dict['data_loss']:.6f}")
 
             # Boundary breakdown
             if 'weighted_cv_mf_bc' in loss_dict:

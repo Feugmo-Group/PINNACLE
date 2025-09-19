@@ -565,15 +565,25 @@ def compute_film_physics_loss(t: torch.Tensor, E: torch.Tensor,
     else:
         return film_loss
 
+def compute_data_loss(fem_data,networks, physics,nsamples,return_residuals: bool = False) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+    inputs = torch.cat([fem_data['t'].unsqueeze(1), fem_data['E'].unsqueeze(1)], dim=1)
+    L_pred = networks['film_thickness'](inputs).squeeze()
+    L_data = fem_data['L']
+    data_residual = L_pred - L_data
+    data_loss = torch.mean(data_residual**2)
+    if return_residuals:
+        return data_loss, data_residual
+    else:
+        return data_loss    
 
 def compute_total_loss(x_interior: torch.Tensor, t_interior: torch.Tensor, E_interior: torch.Tensor,
                        x_boundary: torch.Tensor, t_boundary: torch.Tensor, E_boundary: torch.Tensor,
                        x_initial: torch.Tensor, t_initial: torch.Tensor, E_initial: torch.Tensor,
-                       t_film: torch.Tensor, E_film: torch.Tensor,
+                       t_film: torch.Tensor, E_film: torch.Tensor, fem_data:torch.Tensor,
                        networks, physics,
                        weights: Optional[Dict[str, float]] = None,
                        ntk_weights: Optional[Dict[str, float]] = None,
-                       return_residuals: bool = False) -> Union[Dict[str, torch.Tensor],
+                       return_residuals: bool = False, Hybrid: bool = False) -> Union[Dict[str, torch.Tensor],
 Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor]]]:
     """
     Compute all losses and return detailed breakdown.
@@ -606,6 +616,8 @@ Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor]]]:
                                                                                   return_residuals=True)
         film_loss, film_residuals = compute_film_physics_loss(t_film, E_film, networks, physics, return_residuals=True)
 
+        data_loss, data_residuals = compute_data_loss(fem_data, networks=networks, physics=physics, nsamples=100, return_residuals=True)
+        
         all_residuals = {
             **interior_residuals,  # cv_pde, av_pde, h_pde, poisson_pde
             'boundary': boundary_residuals,
@@ -617,6 +629,7 @@ Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor]]]:
         boundary_loss, boundary_breakdown = compute_boundary_loss(x_boundary, t_boundary, E_boundary, networks, physics)
         initial_loss, initial_breakdown = compute_initial_loss(x_initial, t_initial, E_initial, networks, physics)
         film_loss = compute_film_physics_loss(t_film, E_film, networks, physics)
+        data_loss = compute_data_loss(fem_data, networks=networks, physics=physics, nsamples=100, return_residuals=False)
 
     # Apply weights - NTK weights take precedence
     if ntk_weights is not None:
@@ -663,6 +676,9 @@ Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor]]]:
     # Total loss
     total_loss = weighted_interior + weighted_boundary + weighted_initial + weighted_film
 
+
+    if Hybrid:
+        total_loss = total_loss + data_loss
     # Combine all losses into one dictionary
     all_losses = {
         'total': total_loss,
@@ -670,6 +686,7 @@ Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor]]]:
         'boundary': weighted_boundary,
         'initial': weighted_initial,
         'film_physics': weighted_film,
+        'data_loss': data_loss if Hybrid else torch.tensor(0.0, device=total_loss.device),
 
         # Individual PDE components
         'weighted_cv_pde': weighted_cv_pde,
