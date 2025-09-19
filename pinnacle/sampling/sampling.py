@@ -11,6 +11,9 @@ from losses.losses import compute_boundary_residuals_for_adaptive
 from losses.losses import compute_initial_residuals_for_adaptive
 from losses.losses import compute_film_physics_loss
 import torch.nn as nn
+import numpy as np
+from pathlib import Path
+import pandas as pd
 
 torch.manual_seed(995)
 
@@ -843,3 +846,65 @@ class CollocationSampler:
         E = single_E.expand(batch_size, 1)
 
         return t, E
+
+    def _load_all_fem_data(self):
+        """Load all FEM txt files and combine"""
+        all_data = {'t': [], 'E': [], 'L': []}
+        
+        fem_dir = Path(self.config.hybrid.fem_data_dir)
+        txt_files = list(fem_dir.glob("*.txt"))
+        
+        for txt_file in txt_files:
+            # Extract voltage from filename like "0.1 V.txt"
+            voltage = float(txt_file.stem.split()[0])
+            
+            # Load tab-separated data
+            df = pd.read_csv(txt_file, sep='\t')
+            
+            t_vals = df['Time/s'].values
+            E_vals = np.full(len(t_vals), voltage) # Constant voltage per file
+            L_vals = df['Filmthickness/m'].values
+
+            valid_mask = ~(np.isnan(t_vals) | np.isnan(E_vals) | np.isnan(L_vals))
+        
+            if np.any(~valid_mask):
+                n_invalid = np.sum(~valid_mask)
+                print(f"Warning: Filtered {n_invalid} NaN values from {txt_file.name}")
+
+            t_vals = t_vals[valid_mask]
+            E_vals = E_vals[valid_mask] 
+            L_vals = L_vals[valid_mask]
+            
+            all_data['t'].append(t_vals)
+            all_data['E'].append(E_vals)
+            all_data['L'].append(L_vals)
+        
+        # Concatenate and non-dimensionalize
+        t_all = np.concatenate(all_data['t']) / self.physics.scales.tc
+        E_all = np.concatenate(all_data['E']) / self.physics.scales.phic  
+        L_all = np.concatenate(all_data['L']) / self.physics.scales.lc
+        
+        return {
+            't': torch.tensor(t_all, dtype=torch.float32, device=self.device),
+            'E': torch.tensor(E_all, dtype=torch.float32, device=self.device),
+            'L': torch.tensor(L_all, dtype=torch.float32, device=self.device)
+        }
+
+    def sample_fem_data(self, n_samples: int = None) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Sample from pre-loaded FEM data"""
+        if not hasattr(self, 'fem_data'):
+            self.fem_data = self._load_all_fem_data()
+        
+        if n_samples is None:
+            n_samples = self.config.get("fem_batch_size", 100)
+        
+        total_points = len(self.fem_data['t'])
+        indices = torch.randperm(total_points, device=self.device)[:n_samples]
+        
+        return {
+            "t":self.fem_data['t'][indices],
+            "E":self.fem_data['E'][indices], 
+            "L":self.fem_data['L'][indices]
+        }
+
+        
