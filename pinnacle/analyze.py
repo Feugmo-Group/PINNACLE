@@ -68,267 +68,136 @@ def load_fem_data(fem_data_dir):
     return fem_data
 
 def compare_film_thickness_curves(networks, physics, fem_data, step="final", 
-                                save_path=None, voltages_to_compare=None,
-                                max_time=None):
-    """
-    Compare PINN film thickness predictions with FEM temporal data.
-    
-    Args:
-        networks: NetworkManager instance with trained networks
-        physics: Physics object  
-        fem_data: Dictionary of FEM validation DataFrames
-        step: Training step identifier
-        save_path: Path to save the plot
-        voltages_to_compare: List of voltages to compare (if None, uses all available)
-        max_time: Maximum time for PINN predictions (if None, uses FEM max time)
-    """
+                                save_path=None, voltages_to_compare=None):
+    """Bare bones FEM vs PINN comparison"""
     import matplotlib.pyplot as plt
-    
+
+    # Scales
+    lc = 1e-9
+    F = 96485
+    R = 8.3145
+    T = 293
+    D_cv = 1.0e-21
+    phic = (R*T)/F
+    tc = (lc ** 2) / D_cv
+
     if voltages_to_compare is None:
         voltages_to_compare = sorted(list(fem_data.keys()))
-    
-    n_voltages = len(voltages_to_compare)
-    if n_voltages == 0:
-        print("No FEM data available for comparison")
-        return
-    
-    # Create subplots - 2 rows: individual curves and comparison
-    fig = plt.figure(figsize=(15, 10))
-    
-    # Individual voltage plots
-    n_cols = min(4, n_voltages)
-    n_rows = (n_voltages + n_cols - 1) // n_cols + 1  # +1 for comparison plot
-    
-    for i, voltage in enumerate(voltages_to_compare):
-        try:
-            # Get FEM data for this voltage
-            fem_df = fem_data[voltage]
-            fem_time = fem_df['Time/s'].values
-            fem_thickness = fem_df['Filmthickness/m'].values
-            
-            # Determine time range for PINN predictions
-            if max_time is None:
-                t_max = fem_time.max()
+        
+   
+    for voltage in voltages_to_compare:
+
+        # Get FEM data
+        fem_df = fem_data[voltage]
+        fem_time_s = fem_df['Time/s'].values
+        fem_thickness_m = fem_df['Filmthickness/m'].values
+        
+        # Non-dimensionalize inputs for PINN
+        time_hat = fem_time_s / tc
+
+        voltage_hat = voltage / phic
+        
+        # PINN input
+        pinn_input = torch.tensor(np.column_stack([
+            time_hat,
+            np.full(len(time_hat), voltage_hat)
+        ]), dtype=torch.float32, device=networks.device)
+        
+        # Get PINN prediction
+        with torch.no_grad():
+            if hasattr(networks, 'networks'):
+                film_net = networks.networks.get('L', networks.networks.get('film_thickness', None))
+                pinn_L_hat = film_net(pinn_input).cpu().numpy().flatten()
             else:
-                t_max = max_time
-            
-            # Create time points for PINN prediction
-            time_points = np.linspace(0, t_max, len(fem_time))
-            
-            # Generate PINN predictions
-            # Create input tensor: [time, voltage] for film thickness network
-            # Based on the architecture, film thickness network takes (t, E) as input
-            pinn_input = torch.tensor(np.column_stack([
-                time_points,
-                np.full(len(time_points), voltage)
-            ]), dtype=torch.float32, device=networks.device)
-            
-            with torch.no_grad():
-                # Get network outputs - should be a dictionary
-                if hasattr(networks, 'networks'):
-                    # If networks is a NetworkManager
-                    film_net = networks.networks.get('film_thickness', None) or networks.networks.get('L', None)
-                    if film_net is not None:
-                        pinn_thickness = film_net(pinn_input).cpu().numpy().flatten()
-                    else:
-                        # Try the forward method which should return a dict
-                        outputs = networks.forward(pinn_input)
-                        if isinstance(outputs, dict):
-                            pinn_thickness = outputs.get('film_thickness', outputs.get('L', None))
-                            if pinn_thickness is not None:
-                                pinn_thickness = pinn_thickness.cpu().numpy().flatten()
-                            else:
-                                print(f"Warning: Could not find film thickness output for voltage {voltage}")
-                                print(f"Available outputs: {list(outputs.keys())}")
-                                continue
-                        else:
-                            print(f"Warning: Unexpected output format for voltage {voltage}")
-                            continue
-                else:
-                    # Direct network access
-                    outputs = networks(pinn_input)
-                    if isinstance(outputs, dict):
-                        pinn_thickness = outputs.get('film_thickness', outputs.get('L', None))
-                        if pinn_thickness is not None:
-                            pinn_thickness = pinn_thickness.cpu().numpy().flatten()
-                        else:
-                            print(f"Warning: Could not find film thickness output")
-                            continue
-                    else:
-                        pinn_thickness = outputs.cpu().numpy().flatten()
-            
-            # Plot individual comparison
-            plt.subplot(n_rows, n_cols, i + 1)
-            plt.plot(fem_time, fem_thickness * 1e9, 'b-', label='FEM', linewidth=2)
-            plt.plot(time_points, pinn_thickness * 1e9, 'r--', label='PINN', linewidth=2)
-            plt.xlabel('Time (s)')
-            plt.ylabel('Film Thickness (nm)')
-            plt.title(f'{voltage}V')
-            plt.legend()
-            plt.grid(True, alpha=0.3)
-            
-        except Exception as e:
-            print(f"Error plotting voltage {voltage}: {e}")
-            continue
+                pinn_L_hat = networks(pinn_input).cpu().numpy().flatten()
+        
+        # Convert to nm
+        pinn_thickness_nm = pinn_L_hat 
+        
+        # Plot
+        plt.figure(figsize=(10, 6))
+        plt.plot(fem_time_s/3600, fem_thickness_m*1e9, 'b-', label='FEM', linewidth=2)
+        plt.plot(fem_time_s/3600, pinn_thickness_nm, 'r--', label='PINN', linewidth=2)
+        plt.xlabel('Time (hours)')
+        plt.ylabel('Film Thickness (nm)')
+        plt.title(f'Film Thickness at {voltage}V')
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        
+        if save_path:
+            plt.savefig(f"{save_path}_{voltage}.png", dpi=300, bbox_inches='tight')
     
-    # Overall comparison plot
-    plt.subplot(n_rows, 1, n_rows)
-    colors = plt.cm.tab10(np.linspace(0, 1, len(voltages_to_compare)))
-    
-    for i, voltage in enumerate(voltages_to_compare):
-        try:
-            fem_df = fem_data[voltage]
-            fem_time = fem_df['Time/s'].values
-            fem_thickness = fem_df['Filmthickness/m'].values
-            
-            # Get PINN predictions (reuse logic from above)
-            if max_time is None:
-                t_max = fem_time.max()
-            else:
-                t_max = max_time
-            
-            time_points = np.linspace(0, t_max, len(fem_time))
-            pinn_input = torch.tensor(np.column_stack([
-                time_points,
-                np.full(len(time_points), voltage)
-            ]), dtype=torch.float32, device=networks.device)
-            
-            with torch.no_grad():
-                if hasattr(networks, 'networks'):
-                    film_net = networks.networks.get('film_thickness', None) or networks.networks.get('L', None)
-                    if film_net is not None:
-                        pinn_thickness = film_net(pinn_input).cpu().numpy().flatten()
-                    else:
-                        outputs = networks.forward(pinn_input)
-                        if isinstance(outputs, dict):
-                            pinn_thickness = outputs.get('film_thickness', outputs.get('L', None))
-                            if pinn_thickness is not None:
-                                pinn_thickness = pinn_thickness.cpu().numpy().flatten()
-                            else:
-                                continue
-                        else:
-                            continue
-                else:
-                    outputs = networks(pinn_input)
-                    if isinstance(outputs, dict):
-                        pinn_thickness = outputs.get('film_thickness', outputs.get('L', None))
-                        if pinn_thickness is not None:
-                            pinn_thickness = pinn_thickness.cpu().numpy().flatten()
-                        else:
-                            continue
-                    else:
-                        pinn_thickness = outputs.cpu().numpy().flatten()
-            
-            color = colors[i]
-            plt.plot(fem_time, fem_thickness * 1e9, '-', color=color, 
-                    label=f'FEM {voltage}V', linewidth=2)
-            plt.plot(time_points, pinn_thickness * 1e9, '--', color=color, 
-                    label=f'PINN {voltage}V', linewidth=2, alpha=0.8)
-            
-        except Exception as e:
-            print(f"Error in overall plot for voltage {voltage}: {e}")
-            continue
-    
-    plt.xlabel('Time (s)')
-    plt.ylabel('Film Thickness (nm)')
-    plt.title('Film Thickness Evolution: PINN vs FEM Comparison')
-    plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
-    plt.grid(True, alpha=0.3)
-    
-    plt.tight_layout()
-    
-    if save_path:
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        print(f"Film thickness comparison plot saved to: {save_path}")
-    
-    plt.show()
 
 def compute_temporal_metrics(networks, physics, fem_data, voltages_to_compare=None):
-    """
-    Compute quantitative comparison metrics between PINN and FEM temporal data.
+    """Compute quantitative comparison metrics between PINN and FEM temporal data"""
     
-    Returns:
-        dict: Comparison metrics for each voltage
-    """
+    # Scales
+    lc = 1e-9
+    F = 96485
+    R = 8.3145
+    T = 293
+    D_cv = 1.0e-21
+    phic = (R*T)/F
+    tc = (lc ** 2) / D_cv
+    
     if voltages_to_compare is None:
         voltages_to_compare = list(fem_data.keys())
-    
+   
     metrics = {}
-    
+   
     for voltage in voltages_to_compare:
-        try:
-            fem_df = fem_data[voltage]
-            fem_time = fem_df['Time/s'].values
-            fem_thickness = fem_df['Filmthickness/m'].values
-            
-            # Generate PINN predictions at FEM time points
-            pinn_input = torch.tensor(np.column_stack([
-                fem_time,
-                np.full(len(fem_time), voltage)
-            ]), dtype=torch.float32, device=networks.device)
-            
-            with torch.no_grad():
-                if hasattr(networks, 'networks'):
-                    film_net = networks.networks.get('film_thickness', None) or networks.networks.get('L', None)
-                    if film_net is not None:
-                        pinn_thickness = film_net(pinn_input).cpu().numpy().flatten()
-                    else:
-                        outputs = networks.forward(pinn_input)
-                        if isinstance(outputs, dict):
-                            pinn_thickness = outputs.get('film_thickness', outputs.get('L', None))
-                            if pinn_thickness is not None:
-                                pinn_thickness = pinn_thickness.cpu().numpy().flatten()
-                            else:
-                                continue
-                        else:
-                            continue
-                else:
-                    outputs = networks(pinn_input)
-                    if isinstance(outputs, dict):
-                        pinn_thickness = outputs.get('film_thickness', outputs.get('L', None))
-                        if pinn_thickness is not None:
-                            pinn_thickness = pinn_thickness.cpu().numpy().flatten()
-                        else:
-                            continue
-                    else:
-                        pinn_thickness = outputs.cpu().numpy().flatten()
-                
-                # Compute metrics
-                mse = np.mean((pinn_thickness - fem_thickness)**2)
-                mae = np.mean(np.abs(pinn_thickness - fem_thickness))
-                rmse = np.sqrt(mse)
-                
-                # Relative error
-                rel_error = np.mean(np.abs(pinn_thickness - fem_thickness) / (np.abs(fem_thickness) + 1e-12))
-                
-                # Correlation coefficient
-                corr = np.corrcoef(pinn_thickness, fem_thickness)[0, 1]
-                
-                # R-squared
-                ss_res = np.sum((fem_thickness - pinn_thickness) ** 2)
-                ss_tot = np.sum((fem_thickness - np.mean(fem_thickness)) ** 2)
-                r2 = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
-                
-                # Final thickness comparison (steady-state)
-                final_fem = fem_thickness[-1]
-                final_pinn = pinn_thickness[-1]
-                final_error = abs(final_pinn - final_fem) / final_fem * 100  # percentage
-                
-                metrics[voltage] = {
-                    'MSE': mse,
-                    'MAE': mae, 
-                    'RMSE': rmse,
-                    'Relative_Error': rel_error,
-                    'Correlation': corr,
-                    'R_squared': r2,
-                    'Final_thickness_FEM_nm': final_fem * 1e9,
-                    'Final_thickness_PINN_nm': final_pinn * 1e9,
-                    'Final_thickness_error_%': final_error
-                }
-                    
-        except Exception as e:
-            print(f"Error computing metrics for voltage {voltage}: {e}")
-    
+        fem_df = fem_data[voltage]
+        fem_time = fem_df['Time/s'].values
+        fem_thickness = fem_df['Filmthickness/m'].values
+        
+        # Non-dimensionalize inputs
+        time_hat = fem_time / tc
+        voltage_hat = voltage / phic
+        
+        # PINN input
+        pinn_input = torch.tensor(np.column_stack([
+            time_hat,
+            np.full(len(time_hat), voltage_hat)
+        ]), dtype=torch.float32, device=networks.device)
+        
+        # Get PINN prediction
+        with torch.no_grad():
+            if hasattr(networks, 'networks'):
+                film_net = networks.networks.get('L', networks.networks.get('film_thickness', None))
+                pinn_L_hat = film_net(pinn_input).cpu().numpy().flatten()
+            else:
+                pinn_L_hat = networks(pinn_input).cpu().numpy().flatten()
+        
+        # Convert to dimensional
+        pinn_thickness = pinn_L_hat * lc
+        
+        # Compute metrics
+        mse = np.mean((pinn_thickness - fem_thickness)**2)
+        mae = np.mean(np.abs(pinn_thickness - fem_thickness))
+        rmse = np.sqrt(mse)
+        rel_error = np.mean(np.abs(pinn_thickness - fem_thickness) / (np.abs(fem_thickness) + 1e-12))
+        corr = np.corrcoef(pinn_thickness, fem_thickness)[0, 1]
+        
+        ss_res = np.sum((fem_thickness - pinn_thickness) ** 2)
+        ss_tot = np.sum((fem_thickness - np.mean(fem_thickness)) ** 2)
+        r2 = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
+        
+        final_fem = fem_thickness[-1]
+        final_pinn = pinn_thickness[-1]
+        final_error = abs(final_pinn - final_fem) / final_fem * 100
+        
+        metrics[voltage] = {
+            'MSE': mse,
+            'MAE': mae,
+            'RMSE': rmse,
+            'Relative_Error': rel_error,
+            'Correlation': corr,
+            'R_squared': r2,
+            'Final_thickness_FEM_nm': final_fem * 1e9,
+            'Final_thickness_PINN_nm': final_pinn * 1e9,
+            'Final_thickness_error_%': final_error
+        }
+   
     return metrics
 
 def load_and_analyze(checkpoint_path, config_path, fem_data_dir=None, output_dir=None):
@@ -361,7 +230,7 @@ def load_and_analyze(checkpoint_path, config_path, fem_data_dir=None, output_dir
    
     # Import specific functions to avoid the problematic analyze_training_results
     from analysis.analysis import (plot_training_losses, visualize_predictions,
-                                  generate_polarization_curve, plot_ntk_weight_densities)
+                                  generate_polarization_curve, potential_investigations)
    
     # Generate individual plots
     if trainer.loss_history.get('total'):
@@ -414,9 +283,9 @@ def load_and_analyze(checkpoint_path, config_path, fem_data_dir=None, output_dir
    
     generate_polarization_curve(trainer.networks, trainer.physics,
                                save_path=os.path.join(plots_dir, "polarization_curve.png"))
-   
-    if trainer.ntk_manager:
-        plot_ntk_weight_densities(trainer.ntk_manager, save_path=plots_dir)
+    
+    potential_investigations(trainer.networks, trainer.physics,cfg,
+                             save_path=plots_dir)
    
     create_loss_landscape(trainer.networks, trainer.physics, trainer.sampler,
                          device=trainer.device, save_path=plots_dir)
@@ -427,17 +296,10 @@ def load_and_analyze(checkpoint_path, config_path, fem_data_dir=None, output_dir
     print(f"Analysis saved to: {plots_dir}")
 
 if __name__ == "__main__":
-    if len(sys.argv) < 3:
-        print("Usage: python analyze_checkpoint.py <checkpoint_path> <config_path> [fem_data_dir] [output_dir]")
-        print("  checkpoint_path: Path to the model checkpoint")
-        print("  config_path: Path to the configuration file")
-        print("  fem_data_dir: Optional directory containing FEM validation txt files (format: 'X.X V.txt')")
-        print("  output_dir: Optional output directory for analysis results")
-        sys.exit(1)
-   
-    checkpoint_path = 
-    config_path = sys.argv[2]
-    fem_data_dir = sys.argv[3] if len(sys.argv) > 3 else None
-    output_dir = sys.argv[4] if len(sys.argv) > 4 else None
+
+    checkpoint_path = "/home/mohidfarooqi/PINNACLE/outputs/experiments/Plots_for_publish/ntk_extended_time_good_plot/checkpoints/final_model.pt"
+    config_path = "/home/mohidfarooqi/PINNACLE/outputs/experiments/Plots_for_publish/ntk_extended_time_good_plot/.hydra/config.yaml"
+    fem_data_dir = "/home/mohidfarooqi/PINNACLE/pinnacle/FEM"
+    output_dir = "/home/mohidfarooqi/PINNACLE/pinnacle/FEM"
    
     load_and_analyze(checkpoint_path, config_path, fem_data_dir, output_dir)
