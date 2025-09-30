@@ -198,7 +198,7 @@ pde:
 
 domain:
   time:
-    time_scale: 900000  # Time scale for the simulation [s]
+    time_scale: 400000	# Time scale for the simulation [s]
   initial:
     L_initial: 1e-9 # Initial film thickness [m]
 
