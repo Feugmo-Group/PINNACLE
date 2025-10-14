@@ -900,11 +900,12 @@ class CollocationSampler:
         
         total_points = len(self.fem_data['t'])
         indices = torch.randperm(total_points, device=self.device)[:n_samples]
-        
-        return {
+        fem_data = {
             "t":self.fem_data['t'][indices],
             "E":self.fem_data['E'][indices], 
             "L":self.fem_data['L'][indices]
         }
+        self.last_fem_data = fem_data 
+        return fem_data
 
         

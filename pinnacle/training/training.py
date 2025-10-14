@@ -617,6 +617,14 @@ class PINNTrainer:
             checkpoint['ntk_current_weights'] = self.ntk_manager.get_current_weights()
             checkpoint['ntk_batch_sizes'] = self.ntk_manager.optimal_batch_sizes
 
+        # Add hybrid data point info if using hybrid training
+        if self.config.hybrid.use_data and hasattr(self.sampler, 'last_fem_data'):
+            checkpoint['hybrid_data_point'] = {
+                't': self.sampler.last_fem_data['t'].cpu().numpy() if torch.is_tensor(self.sampler.last_fem_data['t']) else self.sampler.last_fem_data['t'],
+                'E': self.sampler.last_fem_data['E'].cpu().numpy() if torch.is_tensor(self.sampler.last_fem_data['E']) else self.sampler.last_fem_data['E'],
+                'L': self.sampler.last_fem_data['L'].cpu().numpy() if torch.is_tensor(self.sampler.last_fem_data['L']) else self.sampler.last_fem_data['L'],
+            }
+
         save_path = os.path.join(self.checkpoints_dir, f"{checkpoint_name}.pt")
         torch.save(checkpoint, save_path)
 
