@@ -44,10 +44,6 @@ def run_single_experiment(config: DictConfig,
     exp_output_dir = os.path.join(base_output_dir, f"seed_{random_seed}")
     os.makedirs(exp_output_dir, exist_ok=True)
     
-    # Update config with experiment-specific settings
-    config.hybrid.use_data = True
-    config.hybrid.fem_batch_size = 1  # Single data point
-    config.hybrid.random_seed = random_seed
     
     # Save config for this run
     config_path = os.path.join(exp_output_dir, "config.yaml")
@@ -72,7 +68,7 @@ def run_single_experiment(config: DictConfig,
         json.dump(serializable_history, f, indent=2)
     
     # Load FEM data for evaluation
-    fem_data = load_fem_data(config.hybrid.fem_data_path)
+    fem_data = load_fem_data(config.hybrid.fem_data_dir)
     
     # Compute metrics
     metrics = compute_temporal_metrics(trainer.networks, trainer.physics, fem_data)
@@ -118,9 +114,11 @@ def aggregate_results(results_list, output_dir):
         statistics[voltage] = {}
         for metric_name, values in all_metrics[voltage].items():
             if values:
+                nan_mask = ~np.isnan(values)
+                values = np.array(values)[nan_mask]
                 statistics[voltage][metric_name] = {
                     'mean': np.mean(values),
-                    'std': np.std(values),
+                    'std': np.std(values()),
                     'min': np.min(values),
                     'max': np.max(values),
                     'median': np.median(values)

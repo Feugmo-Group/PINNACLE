@@ -56,7 +56,7 @@ def load_fem_data(fem_data_dir):
                     print(f"Available columns: {df.columns.tolist()}")
                     continue
                 
-                fem_data[voltage] = df
+                fem_data[voltage] = df.dropna().reset_index(drop=True)
                 print(f"Loaded FEM data for {voltage}V: {len(df)} time points")
                 
             except Exception as e:
@@ -194,11 +194,34 @@ def compute_temporal_metrics(networks, physics, fem_data, voltages_to_compare=No
             'Correlation': corr,
             'R_squared': r2,
             'Final_thickness_FEM_nm': final_fem * 1e9,
-            'Final_thickness_PINN_nm': final_pinn * 1e9,
-            'Final_thickness_error_%': final_error
+            'Final_thickness_PINN_nm': str(final_pinn * 1e9),
+            'Final_thickness_error_%': str(final_error)
         }
    
     return metrics
+
+def get_hybrid_data_info(cfg, checkpoint):
+    """Extract hybrid training data point information if available"""
+    hybrid_info = {}
+    
+    # Check if hybrid training was used
+    if hasattr(cfg, 'hybrid') and cfg.hybrid.get('use_data', False):
+        hybrid_info['enabled'] = True
+        hybrid_info['batch_size'] = cfg.hybrid.get('fem_batch_size', 'N/A')
+        hybrid_info['random_seed'] = cfg.hybrid.get('random_seed', 'N/A')
+        
+        # Try to get actual data point from checkpoint if stored
+    if 'hybrid_data_point' in checkpoint:
+            dp = checkpoint['hybrid_data_point']
+            hybrid_info['data_point'] = {
+                't': float(dp['t'][0]) if len(dp['t']) > 0 else 'N/A',
+                'E': float(dp['E'][0]) if len(dp['E']) > 0 else 'N/A', 
+                'L': float(dp['L'][0]) if len(dp['L']) > 0 else 'N/A'
+            }
+    else:
+        hybrid_info['enabled'] = False
+
+    return hybrid_info
 
 def load_and_analyze(checkpoint_path, config_path, fem_data_dir=None, output_dir=None):
     # Load config
@@ -217,13 +240,23 @@ def load_and_analyze(checkpoint_path, config_path, fem_data_dir=None, output_dir
    
     # Load checkpoint data for stats
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
+
+    # Get hybrid training info
+    hybrid_info = get_hybrid_data_info(cfg, checkpoint)
+    if hybrid_info['enabled']:
+        print(f"\n=== Hybrid Training Info ===")
+        print(f"Data points used: {hybrid_info['batch_size']}")
+        print(f"Random seed: {hybrid_info['random_seed']}")
+        if 'data_point' in hybrid_info:
+            print(f"Data point: {hybrid_info['data_point']}")
+        print("=" * 30 + "\n")
    
     # Load FEM data if provided
     fem_data = {}
     if fem_data_dir:
         fem_data = load_fem_data(fem_data_dir)
         print(f"Loaded FEM data for {len(fem_data)} voltages: {sorted(list(fem_data.keys()))}")
-   
+
     # Run analysis
     plots_dir = os.path.join(output_dir, "plots")
     os.makedirs(plots_dir, exist_ok=True)
@@ -251,15 +284,30 @@ def load_and_analyze(checkpoint_path, config_path, fem_data_dir=None, output_dir
             with open(metrics_path, 'w') as f:
                 f.write("PINN vs FEM Film Thickness Temporal Comparison Metrics\n")
                 f.write("=" * 60 + "\n")
+                # Add hybrid info if available
+                if hybrid_info['enabled']:
+                    f.write(f"Hybrid Training: Yes (Seed: {hybrid_info['random_seed']}, Points: {hybrid_info['batch_size']})\n")
+                    f.write(f"Data Point: {hybrid_info['data_point']} \n" if 'data_point' in hybrid_info else "")
+                else:
+                    f.write("Hybrid Training: No (Pure PINN)\n")
+                f.write("=" * 60 + "\n")
                 f.write(f"{'Voltage (V)':<12} {'MSE':<12} {'MAE':<12} {'RMSE':<12} {'R²':<8} {'Final Error (%)':<15}\n")
                 f.write("-" * 80 + "\n")
-                
                 for voltage in sorted(metrics.keys()):
                     voltage_metrics = metrics[voltage]
-                    f.write(f"{voltage:<12.1f} {voltage_metrics['MSE']:<12.2e} "
-                           f"{voltage_metrics['MAE']:<12.2e} {voltage_metrics['RMSE']:<12.2e} "
-                           f"{voltage_metrics['R_squared']:<8.4f} {voltage_metrics['Final_thickness_error_%']:<15.2f}\n")
-                
+                    
+                    try:
+                        f.write(f"{float(voltage):<12.1f} {float(voltage_metrics['MSE']):<12.2e} "
+                            f"{float(voltage_metrics['MAE']):<12.2e} {float(voltage_metrics['RMSE']):<12.2e} "
+                            f"{float(voltage_metrics['R_squared']):<8.4f} {float(voltage_metrics['Final_thickness_error_%']):<15.2f}\n")
+                    except (ValueError, TypeError) as e:
+                        # Handle NaN or invalid values
+                        f.write(f"{voltage}: MSE={voltage_metrics.get('MSE', 'N/A')} "
+                            f"MAE={voltage_metrics.get('MAE', 'N/A')} "
+                            f"RMSE={voltage_metrics.get('RMSE', 'N/A')} "
+                            f"R²={voltage_metrics.get('R_squared', 'N/A')} "
+                            f"Final Error={voltage_metrics.get('Final_thickness_error_%', 'N/A')}%\n")    
+
                 f.write("\n" + "=" * 60 + "\n")
                 f.write("Detailed Metrics by Voltage:\n")
                 f.write("=" * 60 + "\n")
@@ -287,8 +335,8 @@ def load_and_analyze(checkpoint_path, config_path, fem_data_dir=None, output_dir
     potential_investigations(trainer.networks, trainer.physics,cfg,
                              save_path=plots_dir)
    
-    create_loss_landscape(trainer.networks, trainer.physics, trainer.sampler,
-                         device=trainer.device, save_path=plots_dir)
+    #create_loss_landscape(trainer.networks, trainer.physics, trainer.sampler,
+    #                   device=trainer.device, save_path=plots_dir)
    
     # Print basic checkpoint info
     print(f"Checkpoint step: {checkpoint.get('step', 'N/A')}")
@@ -297,8 +345,8 @@ def load_and_analyze(checkpoint_path, config_path, fem_data_dir=None, output_dir
 
 if __name__ == "__main__":
 
-    checkpoint_path = "/home/mohidfarooqi/PINNACLE/outputs/experiments/Plots_for_publish/ntk_extended_time_good_plot/checkpoints/final_model.pt"
-    config_path = "/home/mohidfarooqi/PINNACLE/outputs/experiments/Plots_for_publish/ntk_extended_time_good_plot/.hydra/config.yaml"
+    checkpoint_path = "/home/mohidfarooqi/PINNACLE/sensitivity_analysis_best/seed_46/checkpoints/best_model.pt"
+    config_path = "sensitivity_analysis_best/seed_46/config.yaml"
     fem_data_dir = "/home/mohidfarooqi/PINNACLE/pinnacle/FEM"
     output_dir = "/home/mohidfarooqi/PINNACLE/pinnacle/FEM"
    

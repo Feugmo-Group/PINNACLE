@@ -403,6 +403,7 @@ def create_loss_landscape(networks:Dict[str,nn.Module], physics:ElectrochemicalP
     ]
     loss_landscapes = {comp: np.zeros((num_of_points,num_of_points)) for comp in loss_components}
 
+    fem_data = sampler.last_fem_data
     for row in tqdm(range(num_of_points)):
         for col in range(num_of_points):
             step_x = xcoord_mesh[row][col]
@@ -414,7 +415,7 @@ def create_loss_landscape(networks:Dict[str,nn.Module], physics:ElectrochemicalP
             loss_dict = compute_total_loss(x_interior, t_interior, E_interior, 
                                      x_boundary, t_boundary, E_boundary,
                                      x_initial, t_initial, E_initial,
-                                     t_film, E_film, networks, physics)
+                                     t_film, E_film,fem_data, networks, physics)
 
             # Store each loss component
             with torch.no_grad():

@@ -18,6 +18,13 @@ from sampling.sampling import CollocationSampler
 from training.training import PINNTrainer
 from analysis.analysis import analyze_training_results
 from analysis.analysis import create_loss_landscape
+import numpy as np
+
+torch.manual_seed(42)
+np.random.seed(42)
+if torch.cuda.is_available():
+    torch.cuda.manual_seed(42)
+    torch.cuda.manual_seed_all(42)
 
 
 def run_training(config: DictConfig, device: torch.device) -> PINNTrainer:
