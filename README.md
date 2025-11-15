@@ -2,7 +2,7 @@
 
 **Physics-Informed Neural Networks Analyzing Corrosion Layers in Electrochemistry**
 
-This repository contains the implementation of physics-informed neural networks (PINNs) for modeling electrochemical corrosion processes at the Metal-Film-Solution interface, along with extensive benchmarking experiments using various optimization algorithms.
+This repository contains the implementation of physics-informed neural networks (PINNs) for modeling electrochemical oxide film development at the Metal-Film-Solution interface, along with extensive benchmarking experiments using various optimization algorithms.
 
 ---
 
@@ -14,7 +14,6 @@ This repository contains the implementation of physics-informed neural networks 
 - [Running the Code](#running-the-code)
   - [1. Jupyter Notebooks](#1-jupyter-notebooks)
   - [2. Main PINNACLE Training](#2-main-pinnacle-training)
-  - [3. RLA-PINNs Benchmark Experiments](#3-rla-pinns-benchmark-experiments)
   - [4. Analysis and Visualization](#4-analysis-and-visualization)
 - [Configuration](#configuration)
 - [Expected Outputs](#expected-outputs)
@@ -115,19 +114,6 @@ PINNACLE/
 │   │   ├── 1.6V.txt
 │   │   └── 1.8V.txt
 │   │
-│   ├── rla_pinns/                    # RLA-PINNs benchmark experiments
-│   │   ├── train.py                 # Universal training script
-│   │   ├── optim/                   # Optimizer implementations
-│   │   │   ├── adam.py, sgd.py, lbfgs.py
-│   │   │   ├── engd.py              # Ensemble NGD
-│   │   │   ├── spring.py            # SPRING optimizer
-│   │   │   ├── kfac.py              # K-FAC optimizer
-│   │   │   └── hessianfree.py       # Hessian-free optimizer
-│   │   │
-│   │   ├── exp1_poisson5d/          # 19 experiment directories
-│   │   ├── exp14_heat4d/            # (one for each benchmark)
-│   │   └── ...                      # Each contains sweep configs
-│   │
 │   ├── NTKPinnacle.ipynb            # Jupyter notebooks (demonstrations)
 │   ├── ALPinnacle.ipynb
 │   ├── NTK+ALPinnacle.ipynb
@@ -167,8 +153,8 @@ jupyter notebook
 | `pinnacle/NTKPinnacle.ipynb` | Demonstrates Neural Tangent Kernel (NTK) loss weighting for balanced training | ~10-15 min |
 | `pinnacle/ALPinnacle.ipynb` | Augmented Lagrangian method for constraint satisfaction | ~10-15 min |
 | `pinnacle/NTK+ALPinnacle.ipynb` | Combined NTK + AL approach for hybrid training | ~15-20 min |
-| `pinnacle/ENGDPinnacle.ipynb` | Ensemble Natural Gradient Descent optimizer demonstration | ~15-20 min |
-| `pinnacle/pinnacle.ipynb` | General PINNACLE workflow overview | ~10 min |
+| `pinnacle/ENGDPinnacle.ipynb` | Energy Natural Gradient Descent Optimizer implementation, currently doesn't work due to malbehvaed Hessians | ~15-20 min |
+| `pinnacle/pinnacle.ipynb` | PINNACLE with dimensional quantities| ~10 min |
 | `Misc/pdm.ipynb` | Detailed electrochemical reaction schemes and chemistry | ~5 min |
 | `Misc/analysis.ipynb` | Post-training analysis and visualization examples | ~5 min |
 
@@ -190,9 +176,9 @@ jupyter notebook
   - Best practices for hybrid physics-data training
 
 - **ENGDPinnacle.ipynb**:
-  - Advanced second-order optimization
-  - Comparison with first-order methods (Adam, SGD)
-  - Computational efficiency analysis
+  - Experimental optimization method we thought would work with the strong constaints and without NTK
+  - Hessians become misbehvaed and the method doesn't work and PDEs being non linear poses issues for convergence guarantess
+  - Still a very good optimizer developed by Johannes M ¨uller and Marius Zeinhofer and expanded on by Andrés Guzmán-Cordero et al. 
 
 ---
 
@@ -211,7 +197,7 @@ python -m pinnacle.main optimizer.lr=0.001 training.max_steps=50000
 python -m pinnacle.main device=cpu
 ```
 
-**Expected Runtime:** 1-3 hours on GPU, 6-12 hours on CPU (for 20,000 training steps)
+**Expected Runtime:** 10-20 minutes on GPU, untested on CPU (for 20,000 training steps)
 
 **Outputs:** Results saved to `outputs/experiments/pinnacle/[timestamp]/`
 
@@ -222,69 +208,6 @@ python -m pinnacle.main device=cpu
 4. Saves checkpoints (`best_model.pt`, `final_model.pt`)
 5. Generates visualizations (training curves, predictions, polarization curves)
 
----
-
-### 3. RLA-PINNs Benchmark Experiments
-
-These experiments test various optimizers on canonical PDEs (Poisson, Heat, Fokker-Planck equations).
-
-#### Running Individual Experiments
-
-```bash
-cd pinnacle/rla_pinns
-
-# Example: Train Poisson equation with Adam
-python train.py --equation=poisson --model=mlp-tanh-64 --optimizer=Adam --lr=1e-3
-
-# Example: Train Heat equation with ENGD
-python train.py --equation=heat --model=mlp-tanh-128 --optimizer=ENGD --lr=1e-3
-
-# Example: Train with SPRING optimizer
-python train.py --equation=log_fokker_planck --model=mlp-tanh-64 --optimizer=SPRING
-```
-
-**Available Optimizers:**
-- First-order: `Adam`, `SGD`
-- Second-order: `LBFGS`, `HessianFree`, `KFAC`
-- Advanced: `ENGD`, `SPRING`, `RNGD`
-
-**Available Equations:**
-- `poisson` - Poisson equation (various dimensions: 5D, 10D, 100D)
-- `heat` - Heat equation (4D time-dependent)
-- `log_fokker_planck` - Fokker-Planck equation
-
-#### Running Full Experiment Sweeps
-
-Each experiment directory contains pre-configured sweeps testing multiple optimizers:
-
-```bash
-# Navigate to specific experiment
-cd pinnacle/rla_pinns/exp14_heat4d
-
-# Generate sweep configurations (if not already present)
-bash create_sweeps.sh
-
-# Launch all sweeps (19 optimizer variants)
-bash launch_sweeps.sh
-
-# Monitor progress (if using Weights & Biases)
-# Results logged to wandb dashboard
-```
-
-**Example Experiments:**
-
-| Experiment | Equation | Dimension | Purpose |
-|------------|----------|-----------|---------|
-| `exp1_poisson5d` | Poisson | 5D | Low-dimensional baseline |
-| `exp2_poisson10d` | Poisson | 10D | Medium-dimensional test |
-| `exp3_poisson100d` | Poisson | 100D | High-dimensional scaling |
-| `exp5_log_fokker_planck` | Fokker-Planck | Variable | Non-linear PDE |
-| `exp14_heat4d` | Heat | 4D | Time-dependent PDE |
-| `exp15_heat4d_fixed` | Heat | 4D | Fixed learning rate variant |
-
-**Expected Runtime:** 30 min - 4 hours per optimizer (depending on complexity)
-
----
 
 ### 4. Analysis and Visualization
 
@@ -521,6 +444,8 @@ Where:
 
 ### Adaptive Sampling
 
+This is almost never useful, I wouldn't use it. 
+
 Dynamically allocates collocation points to high-error regions:
 
 1. Evaluate PDE residuals on large base set (e.g., 10,000 points)
@@ -610,16 +535,13 @@ python -m pinnacle.main --cfg job
 **For Faster Iteration:**
 - Use fewer training steps: `training.max_steps=5000`
 - Reduce network size: `architecture.layer_size=10 architecture.num_hidden_layers=3`
-- Disable expensive analysis: Comment out plotting code in `main.py`
 
 **For Better Accuracy:**
 - Increase sampling density: `sampling.n_interior=16000`
 - Use deeper networks: `architecture.num_hidden_layers=8`
-- Enable NTK weighting: `training.weighting_method=ntk`
 - Add FEM hybrid training: `hybrid.use_fem_data=true`
 
 **For Large-Scale Experiments:**
-- Use W&B for experiment tracking: Set `WANDB_PROJECT` environment variable
 - Leverage multi-GPU: Modify `main.py` for `DataParallel`
 - Batch process sweeps: Use `launch_sweeps.sh` in experiment directories
 
@@ -630,12 +552,7 @@ python -m pinnacle.main --cfg job
 If you use this code in your research, please cite:
 
 ```bibtex
-@article{pinnacle2024,
-  title={PINNACLE: Physics-Informed Neural Networks Analyzing Corrosion Layers in Electrochemistry},
-  author={[Authors]},
-  journal={[Journal]},
-  year={2024}
-}
+ @misc{farooqi_bösing_feugmo, conrard g. tetsassi_2025, title={A physics-informed neural network approach to the point defect model for electrochemical oxide film growth}, url={https://arxiv.org/abs/2510.02872}, journal={arXiv.org}, author={Farooqi, Mohid and Bösing, Ingmar and Feugmo, Conrard G. Tetsassi}, year={2025} }
 ```
 
 ---
