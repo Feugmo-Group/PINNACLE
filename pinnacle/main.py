@@ -20,11 +20,11 @@ from analysis.analysis import analyze_training_results
 from analysis.analysis import create_loss_landscape
 import numpy as np
 
-torch.manual_seed(42)
-np.random.seed(42)
+torch.manual_seed(46)
+np.random.seed(46)
 if torch.cuda.is_available():
-    torch.cuda.manual_seed(42)
-    torch.cuda.manual_seed_all(42)
+    torch.cuda.manual_seed(46)
+    torch.cuda.manual_seed_all(46)
 
 
 def run_training(config: DictConfig, device: torch.device) -> PINNTrainer:
@@ -154,8 +154,6 @@ def main(cfg: DictConfig) -> None:
 
 if __name__ == "__main__":
     # Set random seeds for reproducibility
-    torch.manual_seed(995) 
-
     # Clear GPU cache
     if torch.cuda.is_available():
         torch.cuda.empty_cache()

@@ -345,8 +345,8 @@ def load_and_analyze(checkpoint_path, config_path, fem_data_dir=None, output_dir
 
 if __name__ == "__main__":
 
-    checkpoint_path = "/home/mohidfarooqi/PINNACLE/sensitivity_analysis_best/seed_46/checkpoints/best_model.pt"
-    config_path = "sensitivity_analysis_best/seed_46/config.yaml"
+    checkpoint_path = "/home/mohidfarooqi/PINNACLE/outputs/experiments/hybrid_training_final/2026-05-12_17-41-28/checkpoints/best_model.pt"
+    config_path = "/home/mohidfarooqi/PINNACLE/outputs/experiments/hybrid_training_final/2026-05-12_17-41-28/.hydra/config.yaml"
     fem_data_dir = "/home/mohidfarooqi/PINNACLE/pinnacle/FEM"
     output_dir = "/home/mohidfarooqi/PINNACLE/pinnacle/FEM"
    
