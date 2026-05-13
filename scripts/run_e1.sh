@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# E1 — Ablation: NTK vs BRDR vs uniform vs batch_size
+# E1 — Ablation: NTK vs uniform vs batch_size (BRDR dropped: not implemented)
 # Outputs: timing.json, loss_landscape_*.png, training_losses.png per run
 # Paper placement: Table II + companion loss-curve figure (Sec III.D, V.B)
 #
@@ -40,7 +40,7 @@ echo "================================================================"
 echo " E1 — Loss-weighting ablation study (${STEPS} steps each)"
 echo "================================================================"
 
-for STRAT in ntk brdr uniform batch_size; do
+for STRAT in ntk uniform batch_size; do
     echo ""
     echo "--- E1: weight_strat=${STRAT} ---"
     PYTHONPATH=/app/pinnacle python -m pinnacle.main \

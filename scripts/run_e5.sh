@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # E5 — Noise-robustness study: noise_sigma in {0, 0.01, 0.05, 0.10, 0.20, 0.50}
-# 5 seeds × 6 sigma levels × 2 strategies (ntk, brdr) = 60 runs (50k steps each).
+# 5 seeds × 6 sigma levels × NTK only = 30 runs (50k steps each).
 # Paper placement: Sec. IV.D or new Sec. IV.F "Noise Robustness"
 #
 # All sub-runs execute inside a single Docker container (install once).
@@ -15,7 +15,7 @@ REPO_DIR="${REPO_DIR:-$(git -C "$(dirname "$0")" rev-parse --show-toplevel)}"
 DOCKER_IMAGE="${DOCKER_IMAGE:-nvcr.io/nvidia/pytorch:26.01-py3}"
 
 echo "================================================================"
-echo " E5 — Noise-robustness sweep (6 sigma × 5 seeds × 2 strategies = 60 runs)"
+echo " E5 — Noise-robustness sweep (6 sigma × 5 seeds × 2 strategies = 30 runs)"
 echo " REPO_DIR     : $REPO_DIR"
 echo " DOCKER_IMAGE : $DOCKER_IMAGE"
 echo "================================================================"
@@ -46,15 +46,13 @@ for SIGMA in "${SIGMAS[@]}"; do
     # Build a filename-safe label: 0.05 → s005
     LABEL="s$(echo "$SIGMA" | tr -d '.')"
     for SEED in "${SEEDS[@]}"; do
-        for STRAT in ntk brdr; do
-            echo "--- E5: sigma=${SIGMA} seed=${SEED} strat=${STRAT} ---"
+            echo "--- E5: sigma=${SIGMA} seed=${SEED} strat=ntk ---"
             PYTHONPATH=/app/pinnacle python -m pinnacle.main \
-                training.weight_strat="${STRAT}" \
+                training.weight_strat="ntk" \
                 training.max_steps="${STEPS}" \
                 hybrid.noise_sigma="${SIGMA}" \
                 hybrid.anchor_seed="${SEED}" \
-                "experiment.name=e5_${LABEL}_seed${SEED}_${STRAT}"
-        done
+                "experiment.name=e5_${LABEL}_seed${SEED}_ntk"
     done
 done
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # E4 — Data-count sweep: N_data in {0,1,2,3,5,10,20,50}
-# 5 seeds × 8 N values × 2 strategies (ntk, brdr) = 80 runs (50k steps each).
+# 5 seeds × 8 N values × NTK only = 40 runs (50k steps each).
 # Paper placement: new Sec. IV.E "Data Efficiency Analysis"
 #
 # All sub-runs execute inside a single Docker container (install once).
@@ -15,7 +15,7 @@ REPO_DIR="${REPO_DIR:-$(git -C "$(dirname "$0")" rev-parse --show-toplevel)}"
 DOCKER_IMAGE="${DOCKER_IMAGE:-nvcr.io/nvidia/pytorch:26.01-py3}"
 
 echo "================================================================"
-echo " E4 — Data-count sweep (8 N values × 5 seeds × 2 strategies = 80 runs)"
+echo " E4 — Data-count sweep (8 N values × 5 seeds × 2 strategies = 40 runs)"
 echo " REPO_DIR     : $REPO_DIR"
 echo " DOCKER_IMAGE : $DOCKER_IMAGE"
 echo "================================================================"
@@ -44,15 +44,13 @@ echo "================================================================"
 
 for N in "${N_VALUES[@]}"; do
     for SEED in "${SEEDS[@]}"; do
-        for STRAT in ntk brdr; do
-            echo "--- E4: N=${N} seed=${SEED} strat=${STRAT} ---"
+            echo "--- E4: N=${N} seed=${SEED} strat=ntk ---"
             PYTHONPATH=/app/pinnacle python -m pinnacle.main \
-                training.weight_strat="${STRAT}" \
+                training.weight_strat="ntk" \
                 training.max_steps="${STEPS}" \
                 hybrid.n_data_points="${N}" \
                 hybrid.anchor_seed="${SEED}" \
-                "experiment.name=e4_N${N}_seed${SEED}_${STRAT}"
-        done
+                "experiment.name=e4_N${N}_seed${SEED}_ntk"
     done
 done
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # E3 — Anchor-point robustness study
-#   Part A: 30 random anchor seeds × {ntk, brdr}  = 60 runs (50k steps)
-#   Part B:  5 systematic (t,E) positions × {ntk, brdr} = 10 runs
+#   Part A: 30 random anchor seeds (NTK only)  = 30 runs (50k steps)
+#   Part B:  5 systematic (t,E) positions (NTK only) = 5 runs
 # Paper placement: expanded Sec. IV.D
 #
 # All sub-runs execute inside a single Docker container (install once).
@@ -48,24 +48,22 @@ STEPS=50000
 # ── Part A: 30 random seeds ───────────────────────────────────────────────────
 if [[ "$PART" == *A* ]]; then
     echo "================================================================"
-    echo " E3-A: 30 random anchor seeds × {ntk, brdr} = 60 runs"
+    echo " E3-A: 30 random anchor seeds (NTK only) = 30 runs"
     echo "================================================================"
     for SEED in $(seq 0 29); do
-        for STRAT in ntk brdr; do
-            echo "--- E3-A seed=${SEED} strat=${STRAT} ---"
+            echo "--- E3-A seed=${SEED} strat=ntk ---"
             PYTHONPATH=/app/pinnacle python -m pinnacle.main \
-                training.weight_strat="${STRAT}" \
+                training.weight_strat="ntk" \
                 training.max_steps="${STEPS}" \
                 hybrid.anchor_seed="${SEED}" \
-                "experiment.name=e3a_seed${SEED}_${STRAT}"
-        done
+                "experiment.name=e3a_seed${SEED}_ntk"
     done
 fi
 
 # ── Part B: systematic (t, E) positions ──────────────────────────────────────
 if [[ "$PART" == *B* ]]; then
     echo "================================================================"
-    echo " E3-B: systematic anchor positions × {ntk, brdr} = 10 runs"
+    echo " E3-B: systematic anchor positions (NTK only) = 5 runs"
     echo "================================================================"
 
     # Format: "label:t_value:E_value"
@@ -84,15 +82,13 @@ if [[ "$PART" == *B* ]]; then
     for ENTRY in "${ANCHORS[@]}"; do
         LABEL="${ENTRY%%:*}"; REST="${ENTRY#*:}"
         T_VAL="${REST%%:*}"; E_VAL="${REST#*:}"
-        for STRAT in ntk brdr; do
-            echo "--- E3-B ${LABEL} (t=${T_VAL}, E=${E_VAL}) strat=${STRAT} ---"
+            echo "--- E3-B ${LABEL} (t=${T_VAL}, E=${E_VAL}) strat=ntk ---"
             PYTHONPATH=/app/pinnacle python -m pinnacle.main \
-                training.weight_strat="${STRAT}" \
+                training.weight_strat="ntk" \
                 training.max_steps="${STEPS}" \
                 hybrid.anchor_t="${T_VAL}" \
                 hybrid.anchor_E="${E_VAL}" \
-                "experiment.name=e3b_${LABEL}_${STRAT}"
-        done
+                "experiment.name=e3b_${LABEL}_ntk"
     done
 fi
 
