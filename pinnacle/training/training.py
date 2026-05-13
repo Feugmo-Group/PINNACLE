@@ -122,7 +122,11 @@ class PINNTrainer:
             'weighted_cv_ic': [], 'weighted_av_ic': [], 'weighted_poisson_ic': [], 'weighted_h_ic': [],
             'weighted_L_ic': [],
             'weighted_cv_mf_bc': [], 'weighted_av_mf_bc': [], 'weighted_u_mf_bc': [],
-            'weighted_cv_fs_bc': [], 'weighted_av_fs_bc': [], 'weighted_u_fs_bc': [], 'weighted_h_fs_bc': []
+            'weighted_cv_fs_bc': [], 'weighted_av_fs_bc': [], 'weighted_u_fs_bc': [], 'weighted_h_fs_bc': [],
+            # Per-BC RMS residuals (paper revision E2). Empty until plumbed through
+            # compute_total_loss / compute_total_loss_al; missing-step entries are NaN.
+            'bc_cv_mf_rms': [], 'bc_av_mf_rms': [], 'bc_u_mf_rms': [],
+            'bc_cv_fs_rms': [], 'bc_av_fs_rms': [], 'bc_u_fs_rms': [], 'bc_h_fs_rms': [],
         }
 
         if self.use_al:
@@ -500,12 +504,17 @@ class PINNTrainer:
         return loss_dict_float
 
     def update_loss_history(self, loss_dict: Dict[str, float]) -> None:
-        """Update the loss history tracking."""
+        """Update the loss history tracking.
+
+        Missing keys are filled with NaN rather than 0.0 so the analysis
+        layer can distinguish "not measured this step" from "perfectly
+        converged". Plotting code must mask NaN before log-scale plots.
+        """
         for key in self.loss_history.keys():
             if key in loss_dict:
                 self.loss_history[key].append(loss_dict[key])
             else:
-                self.loss_history[key].append(0.0)  # Default for missing keys
+                self.loss_history[key].append(float('nan'))
 
 
     def print_progress(self, loss_dict: Dict[str, float]) -> None:

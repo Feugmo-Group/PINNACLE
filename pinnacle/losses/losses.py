@@ -226,7 +226,17 @@ Tuple[torch.Tensor, Dict[str, torch.Tensor], torch.Tensor]]:
         'cv_fs_bc': cv_fs_loss,
         'av_fs_bc': av_fs_loss,
         'u_fs_bc': u_fs_loss,
-        'h_fs_bc': h_fs_loss
+        'h_fs_bc': h_fs_loss,
+        # Per-component RMS residuals for the stiff-BC diagnostic figure
+        # (paper revision E2; addresses R2.3). The epsilon prevents NaN
+        # gradients when a component is identically zero.
+        'bc_cv_mf_rms': torch.sqrt(cv_mf_loss + 1e-30),
+        'bc_av_mf_rms': torch.sqrt(av_mf_loss + 1e-30),
+        'bc_u_mf_rms':  torch.sqrt(u_mf_loss  + 1e-30),
+        'bc_cv_fs_rms': torch.sqrt(cv_fs_loss + 1e-30),
+        'bc_av_fs_rms': torch.sqrt(av_fs_loss + 1e-30),
+        'bc_u_fs_rms':  torch.sqrt(u_fs_loss  + 1e-30),
+        'bc_h_fs_rms':  torch.sqrt(h_fs_loss  + 1e-30),
     }
 
     if return_residuals:
@@ -694,8 +704,13 @@ Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor]]]:
         'weighted_h_pde': weighted_h_pde,
         'weighted_poisson_pde': weighted_poisson_pde,
 
-        # Individual boundary components
-        **{f"weighted_{k}": boundary_weight * v for k, v in boundary_breakdown.items()},
+        # Individual boundary components (skip the per-BC RMS keys — they are
+        # diagnostic only and must not be re-weighted).
+        **{f"weighted_{k}": boundary_weight * v
+           for k, v in boundary_breakdown.items() if not k.startswith('bc_')},
+
+        # Raw per-BC RMS residuals (paper revision E2 / Sec. V.C diagnostic).
+        **{k: v for k, v in boundary_breakdown.items() if k.startswith('bc_')},
 
         # Individual initial components
         **{f"weighted_{k}": initial_weight * v for k, v in initial_breakdown.items()}
