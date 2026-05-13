@@ -143,6 +143,17 @@ class PINNTrainer:
         self.start_time = None
         self.total_params = sum(p.numel() for p in self.networks.get_all_parameters() if p.requires_grad)
 
+        # Inverse-problem mode: cache observation set once so the inverse
+        # experiment is deterministic across the run (E6).
+        self.inverse_enabled = bool(getattr(self.physics, 'inverse_enabled', False))
+        self.inverse_obs = None
+        if self.inverse_enabled:
+            self.inverse_obs = self.sampler.sample_inverse_observations()
+            if self.inverse_obs is None:
+                raise RuntimeError("inverse.enabled=true but FEM data unavailable; cannot sample observations.")
+            n = int(self.inverse_obs['t'].shape[0])
+            print(f"🔬 Inverse observations cached: N={n} points at voltages "
+                  f"{sorted(set(self.inverse_obs['E'].view(-1).tolist()))}")
 
         print(f"✅ Initialization complete!")
         print(f"📊 Total parameters: {self.total_params:,}")
@@ -403,6 +414,20 @@ class PINNTrainer:
                 weights=self.loss_weights,
                 ntk_weights=None,Hybrid=self.config.hybrid.use_data  # Use standard weights
             )
+
+        # Inverse-problem observation loss (paper revision E6).
+        # MSE between the film-thickness network prediction at the observation
+        # locations and the FEM-derived ground-truth L. Gradient flows through
+        # the network weights AND through k3_0/D_cv, which are the unknowns.
+        if self.inverse_enabled and self.inverse_obs is not None:
+            t_obs = self.inverse_obs['t']
+            E_obs = self.inverse_obs['E']
+            L_obs = self.inverse_obs['L']
+            # Predict in dimensionless coordinates; the L network expects (t, E).
+            L_pred = self.networks['film_thickness'](torch.cat([t_obs, E_obs], dim=1))
+            obs_loss = torch.mean((L_pred - L_obs) ** 2)
+            loss_dict['obs_loss'] = obs_loss
+            loss_dict['total'] = loss_dict['total'] + obs_loss
 
         return loss_dict
     
