@@ -898,16 +898,29 @@ class CollocationSampler:
             'L': torch.tensor(L_all, dtype=torch.float32, device=self.device)
         }
 
+    # Paper-documented anchor used in all original PINNACLE figures.
+    # See Sec. III.E of the manuscript: (t* = 150 000 s, E* = 0.1 V, L* = 1.27 nm).
+    _PAPER_ANCHOR_T_PHYS = 150_000.0  # seconds
+    _PAPER_ANCHOR_E_PHYS = 0.1        # volts
+
     def sample_fem_data(self, n_samples: int = None) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Sample anchor points from pre-loaded FEM data.
 
-        Supports the four anchor controls added for the paper revision
-        (E3/E4/E5):
+        Anchor-selection mode is controlled by ``hybrid.anchor_mode``:
 
-        - ``hybrid.anchor_seed``  : RNG seed for the random sampler.
-        - ``hybrid.anchor_t/_E``  : nearest-FEM-point selection for E3-B.
+        - ``"paper"`` (default): snap to the paper-documented anchor at
+          (t = 150 000 s, E = 0.1 V, L = 1.27 nm). Reproduces all original
+          figures. ``anchor_seed`` is ignored.
+        - ``"seed"``: random selection seeded by ``hybrid.anchor_seed``;
+          used by E3-A (30-seed sweep) and E4 (data-count sweep).
+        - ``"position"``: nearest-FEM-point lookup to
+          (``hybrid.anchor_t``, ``hybrid.anchor_E``); used by E3-B
+          (systematic position sweep).
+
+        Other controls:
+
         - ``hybrid.n_data_points``: how many anchors to draw (E4).
-        - ``hybrid.noise_sigma``  : Gaussian multiplicative noise on L (E5).
+        - ``hybrid.noise_sigma``: Gaussian multiplicative noise on L (E5).
 
         Returns ``None`` if the FEM data directory is missing.
         """
@@ -923,23 +936,43 @@ class CollocationSampler:
                             or hybrid.get('fem_batch_size', 1))
 
         total_points = len(self.fem_data['t'])
-        anchor_t = hybrid.get('anchor_t', None)
-        anchor_E = hybrid.get('anchor_E', None)
+        anchor_mode = str(hybrid.get('anchor_mode', 'paper')).lower()
 
-        if anchor_t is not None and anchor_E is not None:
-            # Systematic E3-B: choose the FEM points closest to (anchor_t, anchor_E).
-            t_diff = (self.fem_data['t'] - float(anchor_t)).abs()
-            E_diff = (self.fem_data['E'] - float(anchor_E)).abs()
-            # Normalised composite distance; equal weight on t and E.
+        if anchor_mode == 'paper':
+            # Snap to the documented paper anchor (t=150000 s, E=0.1 V).
+            t_target_nd = self._PAPER_ANCHOR_T_PHYS / float(self.physics.scales.tc)
+            E_target_nd = self._PAPER_ANCHOR_E_PHYS / float(self.physics.scales.phic)
+            t_diff = (self.fem_data['t'] - t_target_nd).abs()
+            E_diff = (self.fem_data['E'] - E_target_nd).abs()
             t_scale = (self.fem_data['t'].max() - self.fem_data['t'].min()).clamp(min=1e-12)
             E_scale = (self.fem_data['E'].max() - self.fem_data['E'].min()).clamp(min=1e-12)
             score = t_diff / t_scale + E_diff / E_scale
             indices = torch.argsort(score)[:n_samples]
-        else:
+        elif anchor_mode == 'position':
+            # Systematic E3-B: choose the FEM points closest to (anchor_t, anchor_E).
+            anchor_t = hybrid.get('anchor_t', None)
+            anchor_E = hybrid.get('anchor_E', None)
+            if anchor_t is None or anchor_E is None:
+                raise ValueError(
+                    "anchor_mode='position' requires hybrid.anchor_t and hybrid.anchor_E to be set."
+                )
+            t_target_nd = float(anchor_t) / float(self.physics.scales.tc)
+            E_target_nd = float(anchor_E) / float(self.physics.scales.phic)
+            t_diff = (self.fem_data['t'] - t_target_nd).abs()
+            E_diff = (self.fem_data['E'] - E_target_nd).abs()
+            t_scale = (self.fem_data['t'].max() - self.fem_data['t'].min()).clamp(min=1e-12)
+            E_scale = (self.fem_data['E'].max() - self.fem_data['E'].min()).clamp(min=1e-12)
+            score = t_diff / t_scale + E_diff / E_scale
+            indices = torch.argsort(score)[:n_samples]
+        elif anchor_mode == 'seed':
             # E3-A / E4 random sampling, seeded for reproducibility.
             seed = int(hybrid.get('anchor_seed', 0))
             g = torch.Generator(device=self.device).manual_seed(seed)
             indices = torch.randperm(total_points, generator=g, device=self.device)[:n_samples]
+        else:
+            raise ValueError(
+                f"Unknown hybrid.anchor_mode={anchor_mode!r}. Use 'paper', 'seed', or 'position'."
+            )
 
         t_sel = self.fem_data['t'][indices]
         E_sel = self.fem_data['E'][indices]

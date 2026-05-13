@@ -55,6 +55,7 @@ if [[ "$PART" == *A* ]]; then
             PYTHONPATH=/app/pinnacle python -m pinnacle.main \
                 training.weight_strat="ntk" \
                 training.max_steps="${STEPS}" \
+                hybrid.anchor_mode=seed \
                 hybrid.anchor_seed="${SEED}" \
                 "experiment.name=e3a_seed${SEED}_ntk"
     done
@@ -86,6 +87,7 @@ if [[ "$PART" == *B* ]]; then
             PYTHONPATH=/app/pinnacle python -m pinnacle.main \
                 training.weight_strat="ntk" \
                 training.max_steps="${STEPS}" \
+                hybrid.anchor_mode=position \
                 hybrid.anchor_t="${T_VAL}" \
                 hybrid.anchor_E="${E_VAL}" \
                 "experiment.name=e3b_${LABEL}_ntk"

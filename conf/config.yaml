@@ -95,10 +95,16 @@ hybrid:
   fem_batch_size: 1
   use_data: True
   # ── Anchor-point controls (paper revision E3/E4/E5) ─────────────────────
-  # Seed for the random-anchor sampler (E3-A 30-seed sweep, E4, E5).
+  # Anchor-selection strategy:
+  #   "paper"    : snap to the paper-documented anchor at (t=150000 s,
+  #                E=0.1 V, L=1.27 nm). Default; reproduces the published
+  #                figures exactly.
+  #   "seed"     : random anchor seeded by hybrid.anchor_seed (E3-A, E4).
+  #   "position" : nearest-FEM-point lookup to (anchor_t, anchor_E) (E3-B).
+  anchor_mode: paper
+  # Seed for the random-anchor sampler (used only when anchor_mode=seed).
   anchor_seed: 0
-  # Systematic anchor location (E3-B). Null => use legacy fixed anchor
-  # at t=150000 s, E=0.1 V, L=1.27 nm (Bösing reference).
+  # Systematic anchor location (used only when anchor_mode=position).
   anchor_t: null
   anchor_E: null
   # Number of FEM anchor points used in hybrid training (E4 sweep).

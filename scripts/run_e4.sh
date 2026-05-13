@@ -49,6 +49,7 @@ for N in "${N_VALUES[@]}"; do
                 training.weight_strat="ntk" \
                 training.max_steps="${STEPS}" \
                 hybrid.n_data_points="${N}" \
+                hybrid.anchor_mode=seed \
                 hybrid.anchor_seed="${SEED}" \
                 "experiment.name=e4_N${N}_seed${SEED}_ntk"
     done

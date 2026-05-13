@@ -50,6 +50,7 @@ for SIGMA in "${SIGMAS[@]}"; do
             PYTHONPATH=/app/pinnacle python -m pinnacle.main \
                 training.weight_strat="ntk" \
                 training.max_steps="${STEPS}" \
+                hybrid.anchor_mode=seed \
                 hybrid.noise_sigma="${SIGMA}" \
                 hybrid.anchor_seed="${SEED}" \
                 "experiment.name=e5_${LABEL}_seed${SEED}_ntk"
