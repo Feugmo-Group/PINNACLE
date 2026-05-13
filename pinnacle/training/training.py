@@ -210,16 +210,38 @@ class PINNTrainer:
 
         return
     def _create_optimizer(self) -> torch.optim.Optimizer:
-        """Create and configure the optimizer."""
-        params = self.networks.get_all_parameters()
+        """Create and configure the optimizer.
+
+        In inverse-problem mode, learnable physics parameters (k3_0, D_cv)
+        are placed in a separate param group with weight_decay=0 and a
+        (typically smaller) learning rate. AdamW's decoupled L2 would
+        otherwise pull these parameters toward zero, biasing the recovery.
+        """
         optimizer_config = self.config['optimizer']['adam']
+        network_params = self.networks.get_all_parameters()
+
+        param_groups = [{
+            'params': network_params,
+            'weight_decay': optimizer_config['weight_decay'],
+        }]
+
+        # Append a separate group for the inverse params if enabled.
+        inverse_cfg = self.config.get('inverse', {}) if hasattr(self.config, 'get') else {}
+        if inverse_cfg.get('enabled', False) and getattr(self.physics, 'inverse_params', None) is not None:
+            inv_params = list(self.physics.inverse_params.parameters())
+            param_groups.append({
+                'params': inv_params,
+                'weight_decay': 0.0,
+                'lr': float(inverse_cfg.get('lr_params', optimizer_config['lr'] * 0.1)),
+            })
+            print(f"🔬 Inverse mode: {len(inv_params)} learnable physics parameter(s) "
+                  f"with weight_decay=0, lr={param_groups[-1]['lr']:.2e}")
 
         optimizer = optim.AdamW(
-            params,
+            param_groups,
             lr=optimizer_config['lr'],
             betas=optimizer_config['betas'],
             eps=optimizer_config['eps'],
-            weight_decay=optimizer_config['weight_decay']
         )
 
         # Set initial_lr for scheduler compatibility
