@@ -54,8 +54,6 @@ if [[ "$PART" == *A* ]]; then
         for STRAT in ntk brdr; do
             echo "--- E3-A seed=${SEED} strat=${STRAT} ---"
             PYTHONPATH=/app/pinnacle python -m pinnacle.main \
-                precision=float64 \
-                +experiments=e3_robustness \
                 training.weight_strat="${STRAT}" \
                 training.max_steps="${STEPS}" \
                 hybrid.anchor_seed="${SEED}" \
@@ -89,8 +87,6 @@ if [[ "$PART" == *B* ]]; then
         for STRAT in ntk brdr; do
             echo "--- E3-B ${LABEL} (t=${T_VAL}, E=${E_VAL}) strat=${STRAT} ---"
             PYTHONPATH=/app/pinnacle python -m pinnacle.main \
-                precision=float64 \
-                +experiments=e3_robustness \
                 training.weight_strat="${STRAT}" \
                 training.max_steps="${STEPS}" \
                 hybrid.anchor_t="${T_VAL}" \

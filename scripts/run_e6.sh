@@ -43,8 +43,6 @@ echo "================================================================"
 # E6-A: 5 observations, 0% noise, 0.1 V
 echo "--- E6-A: N_obs=5, sigma=0, V=[0.1] ---"
 PYTHONPATH=/app/pinnacle python -m pinnacle.main \
-        precision=float64 \
-    +experiments=e6_inverse \
     training.max_steps="${STEPS}" \
     inverse.n_obs=5 inverse.obs_noise_sigma=0.0 \
     "inverse.obs_voltages=[0.1]" \
@@ -53,8 +51,6 @@ PYTHONPATH=/app/pinnacle python -m pinnacle.main \
 # E6-B: 5 observations, 5% noise, 0.1 V
 echo "--- E6-B: N_obs=5, sigma=0.05, V=[0.1] ---"
 PYTHONPATH=/app/pinnacle python -m pinnacle.main \
-        precision=float64 \
-    +experiments=e6_inverse \
     training.max_steps="${STEPS}" \
     inverse.n_obs=5 inverse.obs_noise_sigma=0.05 \
     "inverse.obs_voltages=[0.1]" \
@@ -63,8 +59,6 @@ PYTHONPATH=/app/pinnacle python -m pinnacle.main \
 # E6-C: 5 observations, 10% noise, 0.1 V
 echo "--- E6-C: N_obs=5, sigma=0.10, V=[0.1] ---"
 PYTHONPATH=/app/pinnacle python -m pinnacle.main \
-        precision=float64 \
-    +experiments=e6_inverse \
     training.max_steps="${STEPS}" \
     inverse.n_obs=5 inverse.obs_noise_sigma=0.10 \
     "inverse.obs_voltages=[0.1]" \
@@ -73,8 +67,6 @@ PYTHONPATH=/app/pinnacle python -m pinnacle.main \
 # E6-D: 10 observations, 5% noise, 0.1+1.0 V
 echo "--- E6-D: N_obs=10, sigma=0.05, V=[0.1,1.0] ---"
 PYTHONPATH=/app/pinnacle python -m pinnacle.main \
-        precision=float64 \
-    +experiments=e6_inverse \
     training.max_steps="${STEPS}" \
     inverse.n_obs=10 inverse.obs_noise_sigma=0.05 \
     "inverse.obs_voltages=[0.1,1.0]" \
@@ -83,8 +75,6 @@ PYTHONPATH=/app/pinnacle python -m pinnacle.main \
 # E6-E: 20 observations, 5% noise, 0.1+1.0 V
 echo "--- E6-E: N_obs=20, sigma=0.05, V=[0.1,1.0] ---"
 PYTHONPATH=/app/pinnacle python -m pinnacle.main \
-        precision=float64 \
-    +experiments=e6_inverse \
     training.max_steps="${STEPS}" \
     inverse.n_obs=20 inverse.obs_noise_sigma=0.05 \
     "inverse.obs_voltages=[0.1,1.0]" \
@@ -94,8 +84,6 @@ PYTHONPATH=/app/pinnacle python -m pinnacle.main \
 echo "--- E6-F: ensemble UQ (10 seeds) ---"
 for SEED in $(seq 0 9); do
     PYTHONPATH=/app/pinnacle python -m pinnacle.main \
-        precision=float64 \
-        +experiments=e6_inverse \
         training.max_steps="${STEPS}" \
         inverse.n_obs=5 inverse.obs_noise_sigma=0.05 \
         "inverse.obs_voltages=[0.1]" \

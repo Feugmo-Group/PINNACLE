@@ -44,10 +44,8 @@ for STRAT in ntk brdr uniform batch_size; do
     echo ""
     echo "--- E1: weight_strat=${STRAT} ---"
     PYTHONPATH=/app/pinnacle python -m pinnacle.main \
-        +experiments=e1_ablation \
         training.weight_strat="${STRAT}" \
         training.max_steps="${STEPS}" \
-        precision=float64 \
         "experiment.name=e1_ablation_${STRAT}"
 done
 

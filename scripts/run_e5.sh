@@ -49,8 +49,6 @@ for SIGMA in "${SIGMAS[@]}"; do
         for STRAT in ntk brdr; do
             echo "--- E5: sigma=${SIGMA} seed=${SEED} strat=${STRAT} ---"
             PYTHONPATH=/app/pinnacle python -m pinnacle.main \
-                precision=float64 \
-                +experiments=e5_noise \
                 training.weight_strat="${STRAT}" \
                 training.max_steps="${STEPS}" \
                 hybrid.noise_sigma="${SIGMA}" \

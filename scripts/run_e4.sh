@@ -47,8 +47,6 @@ for N in "${N_VALUES[@]}"; do
         for STRAT in ntk brdr; do
             echo "--- E4: N=${N} seed=${SEED} strat=${STRAT} ---"
             PYTHONPATH=/app/pinnacle python -m pinnacle.main \
-                precision=float64 \
-                +experiments=e4_data_count \
                 training.weight_strat="${STRAT}" \
                 training.max_steps="${STEPS}" \
                 hybrid.n_data_points="${N}" \
