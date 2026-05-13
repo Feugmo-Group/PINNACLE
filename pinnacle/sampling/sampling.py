@@ -5,7 +5,7 @@ Simple collocation point sampling for PINNACLE.
 This module provides the basic sampling functions needed for PINN training.
 """
 import torch
-from typing import Dict, Any, Tuple
+from typing import Dict, Any, Tuple, Optional
 from physics.physics import ElectrochemicalPhysics
 from losses.losses import compute_boundary_residuals_for_adaptive
 from losses.losses import compute_initial_residuals_for_adaptive
@@ -956,5 +956,77 @@ class CollocationSampler:
         fem_data = {"t": t_sel, "E": E_sel, "L": L_sel}
         self.last_fem_data = fem_data
         return fem_data
+
+    def sample_inverse_observations(self) -> Optional[Dict[str, torch.Tensor]]:
+        """Sample fixed observation set for the inverse-problem experiment.
+
+        Reads ``config.inverse``:
+          - ``obs_voltages``        : list of voltages at which to draw L(t)
+          - ``n_obs``               : number of observations per voltage
+          - ``obs_noise_sigma``     : Gaussian multiplicative noise on L
+
+        The observations are drawn deterministically (evenly spaced in time
+        per voltage) so the inverse experiment is reproducible across runs.
+        Noise is seeded from ``config.seed`` if present, else from a fixed
+        seed. Returns ``None`` if the FEM data directory is missing.
+
+        Returns
+        -------
+        Optional[Dict[str, torch.Tensor]]
+            Dictionary with keys ``t``, ``E``, ``L`` (each shape ``[N]``),
+            or ``None`` if FEM data is unavailable.
+        """
+        if not hasattr(self, 'fem_data'):
+            self.fem_data = self._load_all_fem_data()
+        if self.fem_data is None:
+            return None
+
+        inv_cfg = getattr(self.config, 'inverse', {}) if hasattr(self.config, 'inverse') else self.config.get('inverse', {})
+        obs_voltages = list(inv_cfg.get('obs_voltages', [0.1]))
+        n_obs = int(inv_cfg.get('n_obs', 5))
+        sigma = float(inv_cfg.get('obs_noise_sigma', 0.0))
+
+        # FEM data is concatenated across voltages; select rows whose E is
+        # within a small tolerance of each requested voltage.
+        t_full = self.fem_data['t']
+        E_full = self.fem_data['E']
+        L_full = self.fem_data['L']
+
+        t_obs_list, E_obs_list, L_obs_list = [], [], []
+        for v in obs_voltages:
+            mask = (E_full - float(v)).abs() < 1e-3
+            n_match = int(mask.sum().item())
+            if n_match == 0:
+                # If the exact voltage is not in the FEM table, snap to the closest.
+                v_actual = float(E_full[(E_full - float(v)).abs().argmin()].item())
+                mask = (E_full - v_actual).abs() < 1e-3
+                n_match = int(mask.sum().item())
+            idx_v = mask.nonzero(as_tuple=False).squeeze(-1)
+            t_v = t_full[idx_v]
+            # Evenly spaced selection across this voltage's time domain.
+            sort_idx = torch.argsort(t_v)
+            idx_v_sorted = idx_v[sort_idx]
+            if n_obs >= n_match:
+                pick = idx_v_sorted
+            else:
+                step = max(1, n_match // n_obs)
+                pick = idx_v_sorted[::step][:n_obs]
+            t_obs_list.append(t_full[pick])
+            E_obs_list.append(E_full[pick])
+            L_obs_list.append(L_full[pick])
+
+        t_obs = torch.cat(t_obs_list).view(-1, 1)
+        E_obs = torch.cat(E_obs_list).view(-1, 1)
+        L_obs = torch.cat(L_obs_list).view(-1, 1)
+
+        if sigma > 0.0:
+            # Seed independently from the anchor draw so noise realisations
+            # are reproducible but uncorrelated with E3/E4/E5 anchor noise.
+            seed = int(inv_cfg.get('seed', 0))
+            g = torch.Generator(device=self.device).manual_seed(seed + 7919)
+            noise = torch.randn(L_obs.shape, generator=g, device=self.device) * sigma
+            L_obs = L_obs * (1.0 + noise)
+
+        return {"t": t_obs, "E": E_obs, "L": L_obs}
 
         
