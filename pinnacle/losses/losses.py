@@ -151,7 +151,7 @@ Tuple[torch.Tensor, Dict[str, torch.Tensor], torch.Tensor]]:
     # CV at m/f interface
     cv_pred_mf = networks['cv'](inputs_mf)
     cv_pred_mf_x = physics.grad_computer.compute_derivative(cv_pred_mf, x_mf)
-    cv_mf_residual = ((-physics.transport.D_cv * physics.scales.cc / physics.scales.lc) * cv_pred_mf_x -
+    cv_mf_residual = ((-physics.D_cv * physics.scales.cc / physics.scales.lc) * cv_pred_mf_x -
                       physics.kinetics.k1_0 * torch.exp(
                 physics.kinetics.alpha_cv * physics.scales.phic * (E_mf / physics.scales.phic - u_pred_mf)) -
                       (physics.transport.U_cv * physics.scales.phic / physics.scales.lc * u_pred_mf_x -
@@ -183,8 +183,8 @@ Tuple[torch.Tensor, Dict[str, torch.Tensor], torch.Tensor]]:
     # CV at f/s interface
     cv_pred_fs = networks['cv'](inputs_fs)
     cv_pred_fs_x = physics.grad_computer.compute_derivative(cv_pred_fs, x_fs)
-    cv_fs_residual = ((-physics.transport.D_cv * physics.scales.cc / physics.scales.lc) * cv_pred_fs_x -
-                      (physics.kinetics.k3_0 * torch.exp(physics.kinetics.beta_cv * physics.scales.phic * u_pred_fs) -
+    cv_fs_residual = ((-physics.D_cv * physics.scales.cc / physics.scales.lc) * cv_pred_fs_x -
+                      (physics.k3_0 * torch.exp(physics.kinetics.beta_cv * physics.scales.phic * u_pred_fs) -
                        physics.transport.U_cv * physics.scales.phic / physics.scales.lc * u_pred_fs_x) * cv_pred_fs * physics.scales.cc)
     cv_fs_loss = torch.mean(cv_fs_residual ** 2)
 
@@ -293,7 +293,7 @@ def compute_boundary_residuals_for_adaptive(x: torch.Tensor, t: torch.Tensor, E:
     # Compute all m/f residuals
     cv_pred_mf = networks['cv'](inputs_mf)
     cv_pred_mf_x = physics.grad_computer.compute_derivative(cv_pred_mf, x_mf)
-    cv_mf_residual = ((-physics.transport.D_cv * physics.scales.cc / physics.scales.lc) * cv_pred_mf_x -
+    cv_mf_residual = ((-physics.D_cv * physics.scales.cc / physics.scales.lc) * cv_pred_mf_x -
                       physics.kinetics.k1_0 * torch.exp(
                 physics.kinetics.alpha_cv * physics.scales.phic * (E_mf / physics.scales.phic - u_pred_mf)) -
                       (physics.transport.U_cv * physics.scales.phic / physics.scales.lc * u_pred_mf_x -
@@ -323,8 +323,8 @@ def compute_boundary_residuals_for_adaptive(x: torch.Tensor, t: torch.Tensor, E:
     # Compute all f/s residuals
     cv_pred_fs = networks['cv'](inputs_fs)
     cv_pred_fs_x = physics.grad_computer.compute_derivative(cv_pred_fs, x_fs)
-    cv_fs_residual = ((-physics.transport.D_cv * physics.scales.cc / physics.scales.lc) * cv_pred_fs_x -
-                      (physics.kinetics.k3_0 * torch.exp(physics.kinetics.beta_cv * physics.scales.phic * u_pred_fs) -
+    cv_fs_residual = ((-physics.D_cv * physics.scales.cc / physics.scales.lc) * cv_pred_fs_x -
+                      (physics.k3_0 * torch.exp(physics.kinetics.beta_cv * physics.scales.phic * u_pred_fs) -
                        physics.transport.U_cv * physics.scales.phic / physics.scales.lc * u_pred_fs_x) * cv_pred_fs * physics.scales.cc)
 
     av_pred_fs = networks['av'](inputs_fs)

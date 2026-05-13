@@ -992,13 +992,18 @@ class CollocationSampler:
         E_full = self.fem_data['E']
         L_full = self.fem_data['L']
 
+        # obs_voltages are configured in physical volts; FEM data is stored
+        # in non-dimensional units (E_full = E_phys / phic). Convert before
+        # matching.
+        phic = float(self.physics.scales.phic)
         t_obs_list, E_obs_list, L_obs_list = [], [], []
         for v in obs_voltages:
-            mask = (E_full - float(v)).abs() < 1e-3
+            v_nd = float(v) / phic
+            mask = (E_full - v_nd).abs() < 1e-3
             n_match = int(mask.sum().item())
             if n_match == 0:
                 # If the exact voltage is not in the FEM table, snap to the closest.
-                v_actual = float(E_full[(E_full - float(v)).abs().argmin()].item())
+                v_actual = float(E_full[(E_full - v_nd).abs().argmin()].item())
                 mask = (E_full - v_actual).abs() < 1e-3
                 n_match = int(mask.sum().item())
             idx_v = mask.nonzero(as_tuple=False).squeeze(-1)

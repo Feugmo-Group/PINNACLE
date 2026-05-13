@@ -13,18 +13,37 @@ from gradients.gradients import GradientComputer, GradientConfig
 class InverseParameters(nn.Module):
     """Container for learnable physics parameters in inverse-problem mode.
 
-    Holds the unknown kinetic parameters as nn.Parameter so they are
-    discoverable via .parameters() and can be added to the optimizer as
-    their own param group (with weight_decay=0 to avoid biasing the
-    recovery). Two parameters of contrasting stiffness are recovered
-    jointly: k3_0 (boundary-stiff, exponential Butler-Volmer term) and
-    D_cv (interior-mild, linear Nernst-Planck coefficient).
+    Recovery is performed in log10-space (``log_k3_0`` and ``log_D_cv``
+    are the actual nn.Parameters). This serves three purposes:
+
+      1. Guarantees positivity of the recovered physical parameters
+         throughout training.
+      2. Makes the optimisation scale-invariant: a single Adam learning
+         rate works for parameters spanning many orders of magnitude
+         (k3_0 ~ 1e-9, D_cv ~ 1e-21).
+      3. Naturally exposes the parameter-stiffness contrast the inverse
+         experiment is designed to quantify (paper revision E6).
+
+    The physical-unit values ``k3_0`` and ``D_cv`` are computed on the
+    fly as ``10 ** log_param`` via @property, so optimiser updates to
+    the log parameters propagate immediately through the residuals.
     """
 
     def __init__(self, k3_0_init: float, D_cv_init: float):
         super().__init__()
-        self.k3_0 = nn.Parameter(torch.tensor(float(k3_0_init)))
-        self.D_cv = nn.Parameter(torch.tensor(float(D_cv_init)))
+        # nn.Parameter() must be created from a tensor of the correct
+        # dtype; default float32 keeps memory consistent with the networks.
+        import math
+        self.log_k3_0 = nn.Parameter(torch.tensor(math.log10(float(k3_0_init))))
+        self.log_D_cv = nn.Parameter(torch.tensor(math.log10(float(D_cv_init))))
+
+    @property
+    def k3_0(self) -> torch.Tensor:
+        return torch.pow(10.0, self.log_k3_0)
+
+    @property
+    def D_cv(self) -> torch.Tensor:
+        return torch.pow(10.0, self.log_D_cv)
 
 
 @dataclass
@@ -170,10 +189,12 @@ class ElectrochemicalPhysics:
         # before any nn.Parameter swap; see _setup_characteristic_scales).
         self._setup_characteristic_scales()
 
-        # Inverse-problem mode: swap selected float parameters for
-        # learnable nn.Parameters. Existing call sites
-        # (self.kinetics.k3_0, self.transport.D_cv) keep working because
-        # we reassign the dataclass attribute in-place.
+        # Inverse-problem mode: route the two unknown parameters through
+        # an InverseParameters module that holds log10(k3_0) and
+        # log10(D_cv) as learnable nn.Parameters. Call sites read the
+        # physical-unit values via physics.k3_0 / physics.D_cv (see
+        # @property below), so the log-space optimisation is invisible
+        # to the residual code.
         inverse_cfg = config.get('inverse', {}) if hasattr(config, 'get') else {}
         self.inverse_enabled = bool(inverse_cfg.get('enabled', False))
         self.inverse_params = None
@@ -182,10 +203,6 @@ class ElectrochemicalPhysics:
                 k3_0_init=inverse_cfg['k3_0_init'],
                 D_cv_init=inverse_cfg['D_cv_init'],
             ).to(device)
-            # Reassign so downstream code keeps using kinetics.k3_0 / transport.D_cv.
-            # Dataclasses don't enforce field types at runtime, so this is safe.
-            object.__setattr__(self.kinetics, 'k3_0', self.inverse_params.k3_0)
-            object.__setattr__(self.transport, 'D_cv', self.inverse_params.D_cv)
 
         # Initialize gradient computer
         grad_config = GradientConfig(
@@ -193,8 +210,29 @@ class ElectrochemicalPhysics:
             retain_graph=True,
             validate_inputs=True
         )
-
         self.grad_computer = GradientComputer(grad_config, device)
+
+    @property
+    def k3_0(self):
+        """Transpassive dissolution rate constant (physical units).
+
+        Returns a learnable 10**log_k3_0 tensor in inverse mode, else
+        the constant float from the kinetics dataclass.
+        """
+        if self.inverse_enabled and self.inverse_params is not None:
+            return self.inverse_params.k3_0
+        return self.kinetics.k3_0
+
+    @property
+    def D_cv(self):
+        """Cation-vacancy diffusivity (physical units).
+
+        Returns a learnable 10**log_D_cv tensor in inverse mode, else
+        the constant float from the transport dataclass.
+        """
+        if self.inverse_enabled and self.inverse_params is not None:
+            return self.inverse_params.D_cv
+        return self.transport.D_cv
 
     def _load_parameters_from_config(self):
         """Load all physics parameters from configuration"""
@@ -382,7 +420,7 @@ class ElectrochemicalPhysics:
         k2 = self.kinetics.k2_0 * torch.exp(self.kinetics.alpha_av * 2 * F_RT * u_mf)
 
         # k₃: Cation vacancy consumption at f/s interface
-        k3 = self.kinetics.k3_0 * torch.exp(self.kinetics.beta_cv * (3 - self.domain.delta3) * F_RT * u_fs)
+        k3 = self.k3_0 * torch.exp(self.kinetics.beta_cv * (3 - self.domain.delta3) * F_RT * u_fs)
 
         # k₄: Chemical reaction (potential independent)
         k4 = self.kinetics.k4_0
@@ -461,7 +499,7 @@ class ElectrochemicalPhysics:
 
         # Cation vacancy residual - implements equation above
         cv_residual = (grads.c_cv_t -
-                       (self.transport.D_cv * self.scales.tc / self.scales.lc ** 2) * grads.c_cv_xx -
+                       (self.D_cv * self.scales.tc / self.scales.lc ** 2) * grads.c_cv_xx -
                        (self.transport.U_cv * self.scales.tc * self.scales.phic / self.scales.lc ** 2) *
                        grads.phi_x * grads.c_cv_x -
                        (self.transport.U_cv * self.scales.tc * self.scales.phic / self.scales.lc ** 2) *
