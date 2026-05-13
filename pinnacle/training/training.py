@@ -127,6 +127,9 @@ class PINNTrainer:
             # compute_total_loss / compute_total_loss_al; missing-step entries are NaN.
             'bc_cv_mf_rms': [], 'bc_av_mf_rms': [], 'bc_u_mf_rms': [],
             'bc_cv_fs_rms': [], 'bc_av_fs_rms': [], 'bc_u_fs_rms': [], 'bc_h_fs_rms': [],
+            # Inverse-problem trajectories (paper revision E6). Populated only
+            # when inverse.enabled; NaN-filled otherwise.
+            'obs_loss': [], 'k3_0': [], 'D_cv': [],
         }
 
         if self.use_al:
@@ -522,6 +525,13 @@ class PINNTrainer:
         # Convert tensors to floats for logging
         loss_dict_float = {k: v.item() if torch.is_tensor(v) else v
                         for k, v in loss_dict.items()}
+
+        # Snapshot inverse-problem parameters (paper revision E6).
+        # Recorded every step so the recovery trajectory and ensemble
+        # spread (E6-F) can be reconstructed without rerunning.
+        if self.inverse_enabled and self.physics.inverse_params is not None:
+            loss_dict_float['k3_0'] = float(self.physics.inverse_params.k3_0.detach().cpu().item())
+            loss_dict_float['D_cv'] = float(self.physics.inverse_params.D_cv.detach().cpu().item())
 
         # Update training state
         self.current_step += 1
