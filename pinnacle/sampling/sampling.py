@@ -850,10 +850,18 @@ class CollocationSampler:
     def _load_all_fem_data(self):
         """Load all FEM txt files and combine"""
         all_data = {'t': [], 'E': [], 'L': []}
-        
+
         fem_dir = Path(self.config.hybrid.fem_data_dir)
+        if not fem_dir.is_dir():
+            print(f"Warning: FEM data directory '{fem_dir}' not found — disabling hybrid FEM training.")
+            self.config.hybrid.use_data = False
+            return None
         txt_files = list(fem_dir.glob("*.txt"))
-        
+        if not txt_files:
+            print(f"Warning: No .txt files found in '{fem_dir}' — disabling hybrid FEM training.")
+            self.config.hybrid.use_data = False
+            return None
+
         for txt_file in txt_files:
             # Extract voltage from filename like "0.1 V.txt"
             voltage = float(txt_file.stem.split()[0])
@@ -891,21 +899,24 @@ class CollocationSampler:
         }
 
     def sample_fem_data(self, n_samples: int = None) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Sample from pre-loaded FEM data"""
+        """Sample from pre-loaded FEM data. Returns None if data is unavailable."""
         if not hasattr(self, 'fem_data'):
             self.fem_data = self._load_all_fem_data()
-        
+
+        if self.fem_data is None:
+            return None
+
         if n_samples is None:
             n_samples = self.config.get("fem_batch_size", 100)
-        
+
         total_points = len(self.fem_data['t'])
         indices = torch.randperm(total_points, device=self.device)[:n_samples]
         fem_data = {
-            "t":self.fem_data['t'][indices],
-            "E":self.fem_data['E'][indices], 
-            "L":self.fem_data['L'][indices]
+            "t": self.fem_data['t'][indices],
+            "E": self.fem_data['E'][indices],
+            "L": self.fem_data['L'][indices]
         }
-        self.last_fem_data = fem_data 
+        self.last_fem_data = fem_data
         return fem_data
 
         

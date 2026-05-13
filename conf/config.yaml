@@ -91,7 +91,7 @@ training:
   ntk_steps: 20000
   physics_steps: 100
 hybrid:
-  fem_data_dir: "/home/mohidfarooqi/PINNACLE/pinnacle/FEM"
+  fem_data_dir: "pinnacle/FEM"
   fem_batch_size: 1
   use_data: True
 # AL-PINNs specific parameters

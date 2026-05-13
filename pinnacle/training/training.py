@@ -267,7 +267,7 @@ class PINNTrainer:
             x_boundary, t_boundary, E_boundary = self.sampler.sample_boundary_points(self.networks)
             x_initial, t_initial, E_initial = self.sampler.sample_initial_points(self.networks)
             t_film, E_film = self.sampler.sample_film_physics_points()
-            fem_data = self.sampler.sample_fem_data(self.config.hybrid.fem_batch_size)
+            fem_data = self.sampler.sample_fem_data(self.config.hybrid.fem_batch_size) if self.config.hybrid.use_data else None
 
             return (x_interior, t_interior, E_interior,
                 x_boundary, t_boundary, E_boundary,
