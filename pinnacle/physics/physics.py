@@ -4,9 +4,27 @@ Electrochemical physics parameters, calculations, and PDE formulations for PINNA
 """
 
 import torch
+from torch import nn
 from typing import Dict, Any, NamedTuple, Tuple
 from dataclasses import dataclass
 from gradients.gradients import GradientComputer, GradientConfig
+
+
+class InverseParameters(nn.Module):
+    """Container for learnable physics parameters in inverse-problem mode.
+
+    Holds the unknown kinetic parameters as nn.Parameter so they are
+    discoverable via .parameters() and can be added to the optimizer as
+    their own param group (with weight_decay=0 to avoid biasing the
+    recovery). Two parameters of contrasting stiffness are recovered
+    jointly: k3_0 (boundary-stiff, exponential Butler-Volmer term) and
+    D_cv (interior-mild, linear Nernst-Planck coefficient).
+    """
+
+    def __init__(self, k3_0_init: float, D_cv_init: float):
+        super().__init__()
+        self.k3_0 = nn.Parameter(torch.tensor(float(k3_0_init)))
+        self.D_cv = nn.Parameter(torch.tensor(float(D_cv_init)))
 
 
 @dataclass
@@ -148,8 +166,26 @@ class ElectrochemicalPhysics:
         # Load all parameter groups from config
         self._load_parameters_from_config()
 
-        # Set up characteristic scales
+        # Set up characteristic scales (must be done from float D_cv,
+        # before any nn.Parameter swap; see _setup_characteristic_scales).
         self._setup_characteristic_scales()
+
+        # Inverse-problem mode: swap selected float parameters for
+        # learnable nn.Parameters. Existing call sites
+        # (self.kinetics.k3_0, self.transport.D_cv) keep working because
+        # we reassign the dataclass attribute in-place.
+        inverse_cfg = config.get('inverse', {}) if hasattr(config, 'get') else {}
+        self.inverse_enabled = bool(inverse_cfg.get('enabled', False))
+        self.inverse_params = None
+        if self.inverse_enabled:
+            self.inverse_params = InverseParameters(
+                k3_0_init=inverse_cfg['k3_0_init'],
+                D_cv_init=inverse_cfg['D_cv_init'],
+            ).to(device)
+            # Reassign so downstream code keeps using kinetics.k3_0 / transport.D_cv.
+            # Dataclasses don't enforce field types at runtime, so this is safe.
+            object.__setattr__(self.kinetics, 'k3_0', self.inverse_params.k3_0)
+            object.__setattr__(self.transport, 'D_cv', self.inverse_params.D_cv)
 
         # Initialize gradient computer
         grad_config = GradientConfig(
