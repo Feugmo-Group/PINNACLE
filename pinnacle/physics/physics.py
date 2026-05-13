@@ -245,9 +245,16 @@ class ElectrochemicalPhysics:
         )
 
     def _setup_characteristic_scales(self):
-        """Setup characteristic scales for non-dimensionalization"""
-        # Compute derived scales
-        self.scales.tc = self.scales.lc ** 2 / self.transport.D_cv
+        """Setup characteristic scales for non-dimensionalization.
+
+        Scales are always computed from Python floats read directly from
+        the config. This is essential when D_cv is later wrapped in an
+        nn.Parameter for inverse-problem mode: if tc were computed from
+        the tensor, every PDE residual would backprop through the scale
+        and into D_cv, contaminating the inverse-recovery gradient.
+        """
+        d_cv_init = float(self.config['pde']['physics']['D_cv'])
+        self.scales.tc = self.scales.lc ** 2 / d_cv_init
         self.scales.phic = self.constants.R * self.constants.T / self.constants.F
         self.scales.chc = self.materials.c_h0
 
