@@ -11,7 +11,9 @@ import torch.optim as optim
 from typing import Dict, Any, List, Optional, Tuple
 from tqdm import tqdm
 import os
+import json
 import time
+import numpy as np
 
 from networks.networks import NetworkManager
 from physics.physics import ElectrochemicalPhysics
@@ -715,14 +717,39 @@ class PINNTrainer:
         # Start timing
         self.start_time = time.time()
 
+        # Per-step instrumentation buffers (Phase 0.1 — answers R2.2 on NTK cost).
+        # Use CUDA events on GPU for accurate kernel-timing; perf_counter on CPU.
+        use_cuda = self.device.type == 'cuda'
+        if use_cuda:
+            start_ev = torch.cuda.Event(enable_timing=True)
+            end_ev = torch.cuda.Event(enable_timing=True)
+            torch.cuda.reset_peak_memory_stats(self.device)
+        step_ms: List[float] = []
+        peak_mem_mb: List[float] = []
+
         # Main training loop
         for step in tqdm(range(self.max_steps), desc="Training Progress"):
+            if use_cuda:
+                start_ev.record()
+            else:
+                t0 = time.perf_counter()
+
             # Perform training step (includes automatic weight updates)
             loss_dict = self.training_step()
 
+            if use_cuda:
+                end_ev.record()
+                torch.cuda.synchronize(self.device)
+                step_ms.append(float(start_ev.elapsed_time(end_ev)))
+                peak_mem_mb.append(float(torch.cuda.max_memory_allocated(self.device) / 1024 ** 2))
+                torch.cuda.reset_peak_memory_stats(self.device)
+            else:
+                step_ms.append((time.perf_counter() - t0) * 1000.0)
+                peak_mem_mb.append(0.0)
+
             # Update tracking
             self.update_loss_history(loss_dict)
-   
+
             if self.use_al and self.current_step % 10 == 0:  # Track every 10 steps to reduce overhead
                 self.track_l2_lambda()
 
@@ -733,10 +760,38 @@ class PINNTrainer:
             current_loss = loss_dict['total']
             self.handle_checkpointing(current_loss)
 
+        # Persist per-step timing for the ablation table (E1 / Table II).
+        self._write_timing_summary(step_ms, peak_mem_mb)
+
         # Training completed
         self._finish_training()
 
         return self.loss_history
+
+    def _write_timing_summary(self, step_ms: List[float], peak_mem_mb: List[float]) -> None:
+        """Dump per-step timing summary to timing.json for the ablation table."""
+        if not step_ms:
+            return
+        # Drop the first step from statistics — first-step CUDA init and lazy
+        # graph compilation make it a multi-second outlier on most setups.
+        ms = np.asarray(step_ms[1:] if len(step_ms) > 1 else step_ms, dtype=float)
+        mem = np.asarray(peak_mem_mb[1:] if len(peak_mem_mb) > 1 else peak_mem_mb, dtype=float)
+        summary = {
+            'strategy': self.weighting_strategy,
+            'n_steps_total': len(step_ms),
+            'n_steps_used_for_stats': int(ms.size),
+            'mean_ms_per_step': float(np.mean(ms)),
+            'median_ms_per_step': float(np.median(ms)),
+            'p95_ms_per_step': float(np.percentile(ms, 95)),
+            'first_step_ms': float(step_ms[0]),
+            'peak_mem_mb_max': float(np.max(mem)) if mem.size else 0.0,
+            'peak_mem_mb_mean': float(np.mean(mem)) if mem.size else 0.0,
+            'device_type': self.device.type,
+        }
+        out_path = os.path.join(self.output_dir, 'timing.json')
+        with open(out_path, 'w') as f:
+            json.dump(summary, f, indent=2)
+        print(f"⏱️  Timing summary written to {out_path}")
 
     def _finish_training(self) -> None:
         """Complete training and print summary."""
