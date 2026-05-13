@@ -899,23 +899,61 @@ class CollocationSampler:
         }
 
     def sample_fem_data(self, n_samples: int = None) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Sample from pre-loaded FEM data. Returns None if data is unavailable."""
+        """Sample anchor points from pre-loaded FEM data.
+
+        Supports the four anchor controls added for the paper revision
+        (E3/E4/E5):
+
+        - ``hybrid.anchor_seed``  : RNG seed for the random sampler.
+        - ``hybrid.anchor_t/_E``  : nearest-FEM-point selection for E3-B.
+        - ``hybrid.n_data_points``: how many anchors to draw (E4).
+        - ``hybrid.noise_sigma``  : Gaussian multiplicative noise on L (E5).
+
+        Returns ``None`` if the FEM data directory is missing.
+        """
         if not hasattr(self, 'fem_data'):
             self.fem_data = self._load_all_fem_data()
-
         if self.fem_data is None:
             return None
 
+        hybrid = getattr(self.config, 'hybrid', {}) if hasattr(self.config, 'hybrid') else self.config.get('hybrid', {})
+        # Anchor count: explicit n_samples wins, then n_data_points, then fem_batch_size.
         if n_samples is None:
-            n_samples = self.config.get("fem_batch_size", 100)
+            n_samples = int(getattr(hybrid, 'n_data_points', None) or hybrid.get('n_data_points')
+                            or hybrid.get('fem_batch_size', 1))
 
         total_points = len(self.fem_data['t'])
-        indices = torch.randperm(total_points, device=self.device)[:n_samples]
-        fem_data = {
-            "t": self.fem_data['t'][indices],
-            "E": self.fem_data['E'][indices],
-            "L": self.fem_data['L'][indices]
-        }
+        anchor_t = hybrid.get('anchor_t', None)
+        anchor_E = hybrid.get('anchor_E', None)
+
+        if anchor_t is not None and anchor_E is not None:
+            # Systematic E3-B: choose the FEM points closest to (anchor_t, anchor_E).
+            t_diff = (self.fem_data['t'] - float(anchor_t)).abs()
+            E_diff = (self.fem_data['E'] - float(anchor_E)).abs()
+            # Normalised composite distance; equal weight on t and E.
+            t_scale = (self.fem_data['t'].max() - self.fem_data['t'].min()).clamp(min=1e-12)
+            E_scale = (self.fem_data['E'].max() - self.fem_data['E'].min()).clamp(min=1e-12)
+            score = t_diff / t_scale + E_diff / E_scale
+            indices = torch.argsort(score)[:n_samples]
+        else:
+            # E3-A / E4 random sampling, seeded for reproducibility.
+            seed = int(hybrid.get('anchor_seed', 0))
+            g = torch.Generator(device=self.device).manual_seed(seed)
+            indices = torch.randperm(total_points, generator=g, device=self.device)[:n_samples]
+
+        t_sel = self.fem_data['t'][indices]
+        E_sel = self.fem_data['E'][indices]
+        L_sel = self.fem_data['L'][indices]
+
+        # E5 noise: multiplicative Gaussian on L, seeded for reproducibility.
+        sigma = float(hybrid.get('noise_sigma', 0.0))
+        if sigma > 0.0:
+            seed = int(hybrid.get('anchor_seed', 0))
+            g = torch.Generator(device=self.device).manual_seed(seed + 1)  # decorrelate from anchor draw
+            noise = torch.randn(L_sel.shape, generator=g, device=self.device) * sigma
+            L_sel = L_sel * (1.0 + noise)
+
+        fem_data = {"t": t_sel, "E": E_sel, "L": L_sel}
         self.last_fem_data = fem_data
         return fem_data
 

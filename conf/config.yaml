@@ -94,12 +94,42 @@ hybrid:
   fem_data_dir: "pinnacle/FEM"
   fem_batch_size: 1
   use_data: True
+  # ── Anchor-point controls (paper revision E3/E4/E5) ─────────────────────
+  # Seed for the random-anchor sampler (E3-A 30-seed sweep, E4, E5).
+  anchor_seed: 0
+  # Systematic anchor location (E3-B). Null => use legacy fixed anchor
+  # at t=150000 s, E=0.1 V, L=1.27 nm (Bösing reference).
+  anchor_t: null
+  anchor_E: null
+  # Number of FEM anchor points used in hybrid training (E4 sweep).
+  n_data_points: 1
+  # Gaussian multiplicative noise on the anchor L value (E5 sweep).
+  noise_sigma: 0.0
 # AL-PINNs specific parameters
   al_beta: 500.0                    # Penalty parameter β
-  al_lr_lambda: 1e-4              # Learning rate for multipliers η_λ  
+  al_lr_lambda: 1e-4              # Learning rate for multipliers η_λ
   al_start_step: 0                 # When to start AL (usually immediate)
   al_tolerance: 1e-6               # Target constraint satisfaction
   al_lambda_max: 100.0             # Clipping bound for multipliers
+
+# Inverse-problem mode (paper revision E6 — addresses R2 main critique).
+# When enabled=true, the two listed parameters are treated as unknowns
+# and recovered via gradient descent alongside the network weights.
+# k3_0 is boundary-stiff (exponential Butler-Volmer); D_cv is
+# interior-mild (linear Nernst-Planck coefficient) — the contrast lets
+# the experiment quantify how parameter stiffness propagates into
+# identification uncertainty.
+inverse:
+  enabled: false
+  unknown_params: [k3_0, D_cv]
+  k3_0_init: 1.0e-8         # initial guess (~2x true 4.5e-9)
+  D_cv_init: 5.0e-21        # initial guess (~5x true 1.0e-21)
+  k3_0_bounds: [1.0e-11, 1.0e-6]
+  D_cv_bounds: [1.0e-23, 1.0e-18]
+  n_obs: 5                  # number of L(t) observations per voltage
+  obs_voltages: [0.1]       # observed voltages; e.g. [0.1] or [0.1, 1.0]
+  obs_noise_sigma: 0.0      # Gaussian multiplicative noise on observations
+  lr_params: 1.0e-4         # separate Adam lr for the physics params
 # Batch sizes for different constraints
 batch_size:
   BC: 1024 # Boundary points per boundary
