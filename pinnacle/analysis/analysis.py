@@ -80,6 +80,22 @@ import matplotlib.gridspec as gridspec
 from tqdm import tqdm
 from scipy.stats import gaussian_kde
 
+# Global figure-font defaults (paper revision: addresses R2.6 on
+# undersized figure fonts). Set once at module import so every figure
+# produced by this module is publication-readable at single-column
+# print width. Individual fontsize= overrides at call sites have been
+# removed; this block is the single source of truth.
+plt.rcParams.update({
+    'font.size': 12,
+    'axes.labelsize': 12,
+    'axes.titlesize': 14,
+    'xtick.labelsize': 11,
+    'ytick.labelsize': 11,
+    'legend.fontsize': 11,
+    'figure.titlesize': 16,
+})
+
+
 def get_weights(networks: Dict[str,nn.Module]) -> list:
     """Extract parameters from all networks and concatenate into a big list
     
@@ -808,7 +824,7 @@ def visualize_predictions(networks, physics, step: str = "final", save_path: Opt
         axes[1, 0].set_ylabel('Dimensionless Film Thickness L̂')
         axes[1, 0].set_title('Film Growth at Different Applied Potentials')
         axes[1, 0].grid(True, alpha=0.3)
-        axes[1, 0].legend(fontsize=10, framealpha=0.9)
+        axes[1, 0].legend(framealpha=0.9)
 
         # 5. Dimensionless film thickness
         axes[1, 1].plot(t_hat_np, L_hat_np, 'k-', linewidth=3)
@@ -831,7 +847,7 @@ def visualize_predictions(networks, physics, step: str = "final", save_path: Opt
         axes[1, 2].set_title(f'Potential Profile φ̂(x̂) at t̂={0.5* physics.domain.time_scale / physics.scales.tc:.3f}, Ê={E_hat_fixed.item():.3f}')
         axes[1, 2].grid(True, alpha=0.3)
 
-        plt.suptitle(f'Dimensionless Network Predictions Overview - Step {step}', fontsize=16)
+        plt.suptitle(f'Dimensionless Network Predictions Overview - Step {step}')
         plt.tight_layout()
 
         # Save plot
@@ -1074,10 +1090,10 @@ def _plot_separate_files(loss_history: Dict[str, List[float]],
             ax.semilogy(loss_history['total'], label='Total Loss', 
                        color='red', linewidth=2.5, alpha=0.9)
     
-    ax.set_title('Total Training Loss', fontsize=14)
-    ax.set_xlabel('Training Step', fontsize=12)
-    ax.set_ylabel('Loss (log scale)', fontsize=12)
-    ax.legend(fontsize=10)
+    ax.set_title('Total Training Loss')
+    ax.set_xlabel('Training Step')
+    ax.set_ylabel('Loss (log scale)')
+    ax.legend()
     ax.grid(True, alpha=0.3)
     plt.tight_layout()
     
@@ -1096,10 +1112,10 @@ def _plot_separate_files(loss_history: Dict[str, List[float]],
     plot_loss(ax, loss_history['initial'], 'Initial')
     plot_loss(ax, loss_history['film_physics'], 'Film Thickness')
     
-    ax.set_title('Main Loss Components', fontsize=14)
-    ax.set_xlabel('Training Step', fontsize=12)
-    ax.set_ylabel('Loss (log scale)', fontsize=12)
-    ax.legend(fontsize=10)
+    ax.set_title('Main Loss Components')
+    ax.set_xlabel('Training Step')
+    ax.set_ylabel('Loss (log scale)')
+    ax.legend()
     ax.grid(True, alpha=0.3)
     plt.tight_layout()
     
@@ -1116,10 +1132,10 @@ def _plot_separate_files(loss_history: Dict[str, List[float]],
     plot_loss(ax, loss_history.get('weighted_h_pde', []), 'Hole PDE')
     plot_loss(ax, loss_history.get('weighted_poisson_pde', []), 'Poisson PDE')
     
-    ax.set_title('Individual PDE Residuals', fontsize=14)
-    ax.set_xlabel('Training Step', fontsize=12)
-    ax.set_ylabel('Loss (log scale)', fontsize=12)
-    ax.legend(fontsize=10)
+    ax.set_title('Individual PDE Residuals')
+    ax.set_xlabel('Training Step')
+    ax.set_ylabel('Loss (log scale)')
+    ax.legend()
     ax.grid(True, alpha=0.3)
     plt.tight_layout()
     
@@ -1139,10 +1155,10 @@ def _plot_separate_files(loss_history: Dict[str, List[float]],
     plot_loss(ax, loss_history.get('weighted_u_fs_bc', []), 'Potential (f/s)')
     plot_loss(ax, loss_history.get('weighted_h_fs_bc', []), 'Hole (f/s)')
     
-    ax.set_title('Boundary Condition Losses', fontsize=14)
-    ax.set_xlabel('Training Step', fontsize=12)
-    ax.set_ylabel('Loss (log scale)', fontsize=12)
-    ax.legend(fontsize=10)
+    ax.set_title('Boundary Condition Losses')
+    ax.set_xlabel('Training Step')
+    ax.set_ylabel('Loss (log scale)')
+    ax.legend()
     ax.grid(True, alpha=0.3)
     plt.tight_layout()
     
@@ -1160,10 +1176,10 @@ def _plot_separate_files(loss_history: Dict[str, List[float]],
     plot_loss(ax, loss_history.get('weighted_poisson_ic', []), 'Poisson IC')
     plot_loss(ax, loss_history.get('weighted_L_ic', []), 'Film Thickness IC')
     
-    ax.set_title('Initial Condition Losses', fontsize=14)
-    ax.set_xlabel('Training Step', fontsize=12)
-    ax.set_ylabel('Loss (log scale)', fontsize=12)
-    ax.legend(fontsize=10)
+    ax.set_title('Initial Condition Losses')
+    ax.set_xlabel('Training Step')
+    ax.set_ylabel('Loss (log scale)')
+    ax.legend()
     ax.grid(True, alpha=0.3)
     plt.tight_layout()
     
@@ -1282,7 +1298,7 @@ def plot_al_multiplier_distributions(trainer: PINNTrainer, save_path: str = None
                 linewidth=2, color='blue')
 
     ax.set_xlabel('Training Step')
-    ax.set_ylabel('||λ||₂', fontsize=12)
+    ax.set_ylabel('||λ||₂')
     ax.set_title('Evolution of Lagrange Multiplier L2 Norm')
     ax.grid(True, alpha=0.3)
     ax.legend()
