@@ -96,12 +96,14 @@ hybrid:
   use_data: True
   # ── Anchor-point controls (paper revision E3/E4/E5) ─────────────────────
   # Anchor-selection strategy:
-  #   "paper"    : snap to the paper-documented anchor at (t=150000 s,
-  #                E=0.1 V, L=1.27 nm). Default; reproduces the published
-  #                figures exactly.
+  #   "default"  : snap to the empirical anchor that reproduces the
+  #                published figures: (t=76000 s, E=0.4 V, L=3.64 nm).
+  #                This differs from the value historically cited in the
+  #                manuscript text — see Sec. IV.D for the discussion of
+  #                anchor sensitivity. "paper" is a deprecated alias.
   #   "seed"     : random anchor seeded by hybrid.anchor_seed (E3-A, E4).
   #   "position" : nearest-FEM-point lookup to (anchor_t, anchor_E) (E3-B).
-  anchor_mode: paper
+  anchor_mode: default
   # Seed for the random-anchor sampler (used only when anchor_mode=seed).
   anchor_seed: 0
   # Systematic anchor location (used only when anchor_mode=position).

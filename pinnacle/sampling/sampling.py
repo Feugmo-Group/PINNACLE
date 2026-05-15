@@ -856,7 +856,11 @@ class CollocationSampler:
             print(f"Warning: FEM data directory '{fem_dir}' not found — disabling hybrid FEM training.")
             self.config.hybrid.use_data = False
             return None
-        txt_files = list(fem_dir.glob("*.txt"))
+        # Sorted glob: filesystem iteration order is OS-/inode-dependent, so an
+        # unsorted glob silently changes which row torch.randperm(N, seed)
+        # picks. Sorting alphabetically makes the FEM concat order
+        # reproducible across machines and remounts (paper revision E3).
+        txt_files = sorted(fem_dir.glob("*.txt"))
         if not txt_files:
             print(f"Warning: No .txt files found in '{fem_dir}' — disabling hybrid FEM training.")
             self.config.hybrid.use_data = False
@@ -898,19 +902,23 @@ class CollocationSampler:
             'L': torch.tensor(L_all, dtype=torch.float32, device=self.device)
         }
 
-    # Paper-documented anchor used in all original PINNACLE figures.
-    # See Sec. III.E of the manuscript: (t* = 150 000 s, E* = 0.1 V, L* = 1.27 nm).
-    _PAPER_ANCHOR_T_PHYS = 150_000.0  # seconds
-    _PAPER_ANCHOR_E_PHYS = 0.1        # volts
+    # Default anchor used to reproduce the published predictions_overview.
+    # NB: this is the *empirical* anchor that reproduces the original figures
+    # — (t = 76 000 s, E = 0.4 V, L = 3.64 nm) — and differs from the value
+    # historically cited in the manuscript text. The discrepancy was traced
+    # during the paper revision: see Sec. IV.D ("Anchor sensitivity").
+    _DEFAULT_ANCHOR_T_PHYS = 76_000.0  # seconds
+    _DEFAULT_ANCHOR_E_PHYS = 0.4       # volts
 
     def sample_fem_data(self, n_samples: int = None) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Sample anchor points from pre-loaded FEM data.
 
         Anchor-selection mode is controlled by ``hybrid.anchor_mode``:
 
-        - ``"paper"`` (default): snap to the paper-documented anchor at
-          (t = 150 000 s, E = 0.1 V, L = 1.27 nm). Reproduces all original
-          figures. ``anchor_seed`` is ignored.
+        - ``"default"`` (default): snap to the empirical anchor that
+          reproduces the published figures, (t = 76 000 s, E = 0.4 V,
+          L = 3.64 nm). ``"paper"`` is accepted as a deprecated alias.
+          ``anchor_seed`` is ignored.
         - ``"seed"``: random selection seeded by ``hybrid.anchor_seed``;
           used by E3-A (30-seed sweep) and E4 (data-count sweep).
         - ``"position"``: nearest-FEM-point lookup to
@@ -936,12 +944,13 @@ class CollocationSampler:
                             or hybrid.get('fem_batch_size', 1))
 
         total_points = len(self.fem_data['t'])
-        anchor_mode = str(hybrid.get('anchor_mode', 'paper')).lower()
+        anchor_mode = str(hybrid.get('anchor_mode', 'default')).lower()
 
-        if anchor_mode == 'paper':
-            # Snap to the documented paper anchor (t=150000 s, E=0.1 V).
-            t_target_nd = self._PAPER_ANCHOR_T_PHYS / float(self.physics.scales.tc)
-            E_target_nd = self._PAPER_ANCHOR_E_PHYS / float(self.physics.scales.phic)
+        if anchor_mode in ('default', 'paper'):
+            # Snap to the empirical anchor that reproduces the published
+            # figures (t = 76 000 s, E = 0.4 V).
+            t_target_nd = self._DEFAULT_ANCHOR_T_PHYS / float(self.physics.scales.tc)
+            E_target_nd = self._DEFAULT_ANCHOR_E_PHYS / float(self.physics.scales.phic)
             t_diff = (self.fem_data['t'] - t_target_nd).abs()
             E_diff = (self.fem_data['E'] - E_target_nd).abs()
             t_scale = (self.fem_data['t'].max() - self.fem_data['t'].min()).clamp(min=1e-12)
@@ -971,7 +980,8 @@ class CollocationSampler:
             indices = torch.randperm(total_points, generator=g, device=self.device)[:n_samples]
         else:
             raise ValueError(
-                f"Unknown hybrid.anchor_mode={anchor_mode!r}. Use 'paper', 'seed', or 'position'."
+                f"Unknown hybrid.anchor_mode={anchor_mode!r}. "
+                "Use 'default' (= 'paper' alias), 'seed', or 'position'."
             )
 
         t_sel = self.fem_data['t'][indices]
