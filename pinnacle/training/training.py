@@ -412,7 +412,7 @@ class PINNTrainer:
                 x_interior, t_interior, E_interior,
                 x_boundary, t_boundary, E_boundary,
                 x_initial, t_initial, E_initial,
-                t_film, E_film,
+                t_film, E_film, fem_data,
                 self.networks, self.physics,
                 weights=self.loss_weights,
                 ntk_weights=None,Hybrid=self.config.hybrid.use_data  # Use standard weights
