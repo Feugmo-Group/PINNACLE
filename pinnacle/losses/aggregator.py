@@ -109,9 +109,15 @@ class PINNAggregator(nn.Module):
 
     @staticmethod
     def _add_obs(total: torch.Tensor, loss_dict: Dict[str, torch.Tensor]) -> torch.Tensor:
-        """Add obs_loss unweighted so data anchors are always enforced."""
-        if 'obs_loss' in loss_dict:
-            return total + loss_dict['obs_loss']
+        """Add data terms unweighted so FEM anchors and inverse obs are always enforced.
+
+        Checks both 'obs_loss' (inverse-problem path) and 'data_loss' (hybrid-training
+        path). Skips non-finite values to avoid NaN propagation.
+        """
+        for key in ('obs_loss', 'data_loss'):
+            val = loss_dict.get(key)
+            if val is not None and isinstance(val, torch.Tensor) and val.isfinite():
+                total = total + val
         return total
 
 
