@@ -35,7 +35,7 @@ networks:
 
 # Learning rate scheduler
 scheduler:
-  type: "None"
+  type: "RLROP"
   tf_exponential_lr:
     decay_rate: 0.99
     decay_steps: 15000
@@ -101,9 +101,11 @@ hybrid:
   #                This differs from the value historically cited in the
   #                manuscript text — see Sec. IV.D for the discussion of
   #                anchor sensitivity. "paper" is a deprecated alias.
+  #   "random"   : draw one random FEM point per step (original behaviour,
+  #                reproduces published <2.2% errors).
   #   "seed"     : random anchor seeded by hybrid.anchor_seed (E3-A, E4).
   #   "position" : nearest-FEM-point lookup to (anchor_t, anchor_E) (E3-B).
-  anchor_mode: default
+  anchor_mode: random
   # Seed for the random-anchor sampler (used only when anchor_mode=seed).
   anchor_seed: 0
   # Systematic anchor location (used only when anchor_mode=position).
@@ -127,6 +129,9 @@ hybrid:
 # interior-mild (linear Nernst-Planck coefficient) — the contrast lets
 # the experiment quantify how parameter stiffness propagates into
 # identification uncertainty.
+seed: 46
+precision: float64   # float64 required for numerical stability of Butler-Volmer BCs
+
 inverse:
   enabled: false
   unknown_params: [k3_0, D_cv]

@@ -691,7 +691,11 @@ class AdaptiveCollocationSampler:
         return (points[:, 0:1].requires_grad_(True),  # t
                 points[:, 1:2])                       # E
 
-class CollocationSampler:   
+def _resolve_dtype(precision: str) -> torch.dtype:
+    return torch.float64 if precision == "float64" else torch.float32
+
+
+class CollocationSampler:
     """
     Simple collocation point sampler for electrochemical PINNs.
 
@@ -711,10 +715,38 @@ class CollocationSampler:
         self.config = config
         self.physics = physics
         self.device = device
-        self.time_scale = physics.domain.time_scale 
-        self.tc = physics.scales.tc 
+        self.time_scale = physics.domain.time_scale
+        self.tc = physics.scales.tc
         # Store batch sizes for easy access
         self.batch_sizes = config["batch_size"]
+
+        # dtype (respects precision config)
+        self.dtype = _resolve_dtype(config.get("precision", "float32"))
+
+        # Sobol quasi-random engines — one per sampling context so sequences are independent
+        self.use_sobol = config.sampling.get("use_sobol", False)
+        if self.use_sobol:
+            self._sobol_interior = torch.quasirandom.SobolEngine(dimension=3, scramble=True)
+            self._sobol_boundary = torch.quasirandom.SobolEngine(dimension=2, scramble=True)
+            self._sobol_initial  = torch.quasirandom.SobolEngine(dimension=2, scramble=True)
+            self._sobol_film     = torch.quasirandom.SobolEngine(dimension=2, scramble=True)
+
+    # ── low-level sampling helpers ────────────────────────────────────────────
+
+    def _draw(self, engine, n: int, d: int) -> torch.Tensor:
+        """Draw n unit samples in [0, 1)^d using Sobol engine or pseudo-random."""
+        if engine is not None:
+            return engine.draw(n).to(device=self.device, dtype=self.dtype)
+        return torch.rand(n, d, device=self.device, dtype=self.dtype)
+
+    def _scale_E(self, E_unit: torch.Tensor) -> torch.Tensor:
+        """Scale unit [0,1) E samples to the dimensional E range (volts).
+        Matches the original sampling convention used throughout training."""
+        E_min = self.physics.geometry.E_min
+        E_max = self.physics.geometry.E_max
+        return E_min + E_unit * (E_max - E_min)
+
+    # ── public sampling methods ───────────────────────────────────────────────
 
     def sample_interior_points(
         self, networks
@@ -729,21 +761,19 @@ class CollocationSampler:
             Tuple of (x, t, E) tensors with requires_grad=True for x and t
         """
         batch_size = self.batch_sizes["interior"]
+        t_scale = self.time_scale / self.tc
 
-        # Sample time and applied potential
-        t = torch.rand(batch_size, 1, device=self.device, requires_grad=True) * self.time_scale / self.tc
-        single_E = (
-            torch.rand(1, 1, device=self.device)
-            * (self.physics.geometry.E_max - self.physics.geometry.E_min)
-            + self.physics.geometry.E_min
-        )
-        E = single_E.expand(batch_size, 1)
+        engine = self._sobol_interior if self.use_sobol else None
+        raw = self._draw(engine, batch_size, 3)  # (N, 3): [t_unit, E_unit, x_unit]
+
+        t = (raw[:, 0:1] * t_scale).detach().requires_grad_(True)
+        E = self._scale_E(raw[:, 1:2]).detach()
 
         # Get film thickness prediction
         L_pred = networks["film_thickness"](torch.cat([t, E], dim=1))
 
         # Sample spatial coordinates within [0, L(t,E)]
-        x = torch.rand(batch_size, 1, device=self.device, requires_grad=True) * L_pred
+        x = (raw[:, 2:3].detach() * L_pred.detach()).requires_grad_(True)
 
         return x, t, E
 
@@ -761,35 +791,27 @@ class CollocationSampler:
         """
         batch_size = 2 * self.batch_sizes["BC"]
 
-        # Sample time and applied potential
-        t = torch.rand(batch_size, 1, device=self.device, requires_grad=True) * self.time_scale / self.tc 
-        single_E = (
-            torch.rand(1, 1, device=self.device)
-            * (self.physics.geometry.E_max - self.physics.geometry.E_min)
-            + self.physics.geometry.E_min
-        )
-        E = single_E.expand(batch_size, 1)
+        t_scale = self.time_scale / self.tc
+
+        engine = self._sobol_boundary if self.use_sobol else None
+        raw = self._draw(engine, batch_size, 2)  # (2N, 2): [t_unit, E_unit]
+
+        t = (raw[:, 0:1] * t_scale).detach().requires_grad_(True)
+        E = self._scale_E(raw[:, 1:2]).detach()
 
         # Predict L for f/s boundary
-        L_inputs = torch.cat([t, E], dim=1)
-        L_pred = networks["film_thickness"](L_inputs)
+        L_pred = networks["film_thickness"](torch.cat([t, E], dim=1))
 
-        half_batch = batch_size // 2
+        half = batch_size // 2
 
         # Metal/film interface points (x = 0)
-        x_mf = torch.zeros(half_batch, 1, device=self.device, requires_grad=True)
-        t_mf = t[:half_batch]
-        E_mf = E[:half_batch]
-
+        x_mf = torch.zeros(half, 1, device=self.device, dtype=self.dtype).requires_grad_(True)
         # Film/solution interface points (x = L)
-        x_fs = L_pred[half_batch:]
-        t_fs = t[half_batch:]
-        E_fs = E[half_batch:]
+        x_fs = L_pred[half:].detach().requires_grad_(True)
 
-        # Combine boundary points
         x_boundary = torch.cat([x_mf, x_fs], dim=0)
-        t_boundary = torch.cat([t_mf, t_fs], dim=0)
-        E_boundary = torch.cat([E_mf, E_fs], dim=0)
+        t_boundary = torch.cat([t[:half], t[half:]], dim=0)
+        E_boundary = torch.cat([E[:half], E[half:]], dim=0)
 
         return x_boundary, t_boundary, E_boundary
 
@@ -807,23 +829,17 @@ class CollocationSampler:
         """
         batch_size = self.batch_sizes["IC"]
 
+        engine = self._sobol_initial if self.use_sobol else None
+        raw = self._draw(engine, batch_size, 2)  # (N, 2): [E_unit, x_unit]
+
         # Initial time (t = 0)
-        t = torch.zeros(batch_size, 1, device=self.device, requires_grad=True) * self.time_scale / self.tc
-        single_E = (
-            torch.rand(1, 1, device=self.device)
-            * (self.physics.geometry.E_max - self.physics.geometry.E_min)
-            + self.physics.geometry.E_min
-        )
-        E = single_E.expand(batch_size, 1)
+        t = torch.zeros(batch_size, 1, device=self.device, dtype=self.dtype).requires_grad_(True)
+        E = self._scale_E(raw[:, 0:1]).detach()
 
         # Get initial film thickness
         L_initial_pred = networks["film_thickness"](torch.cat([t, E], dim=1))
 
-        # Sample spatial coordinates
-        x = (
-            torch.rand(batch_size, 1, device=self.device, requires_grad=True)
-            * L_initial_pred
-        )
+        x = (raw[:, 1:2].detach() * L_initial_pred.detach()).requires_grad_(True)
 
         return x, t, E
 
@@ -835,15 +851,13 @@ class CollocationSampler:
             Tuple of (t, E) tensors for film physics constraint
         """
         batch_size = self.batch_sizes["L"]
+        t_scale = self.time_scale / self.tc
 
-        # Sample time and applied potential
-        t = torch.rand(batch_size, 1, device=self.device, requires_grad=True) * self.time_scale / self.tc 
-        single_E = (
-            torch.rand(1, 1, device=self.device)
-            * (self.physics.geometry.E_max - self.physics.geometry.E_min)
-            + self.physics.geometry.E_min
-        )
-        E = single_E.expand(batch_size, 1)
+        engine = self._sobol_film if self.use_sobol else None
+        raw = self._draw(engine, batch_size, 2)  # (N, 2): [t_unit, E_unit]
+
+        t = (raw[:, 0:1] * t_scale).detach().requires_grad_(True)
+        E = self._scale_E(raw[:, 1:2]).detach()
 
         return t, E
 
@@ -897,9 +911,9 @@ class CollocationSampler:
         L_all = np.concatenate(all_data['L']) / self.physics.scales.lc
         
         return {
-            't': torch.tensor(t_all, dtype=torch.float32, device=self.device),
-            'E': torch.tensor(E_all, dtype=torch.float32, device=self.device),
-            'L': torch.tensor(L_all, dtype=torch.float32, device=self.device)
+            't': torch.tensor(t_all, dtype=torch.get_default_dtype(), device=self.device),
+            'E': torch.tensor(E_all, dtype=torch.get_default_dtype(), device=self.device),
+            'L': torch.tensor(L_all, dtype=torch.get_default_dtype(), device=self.device)
         }
 
     # Default anchor used to reproduce the published predictions_overview.
@@ -978,10 +992,15 @@ class CollocationSampler:
             seed = int(hybrid.get('anchor_seed', 0))
             g = torch.Generator(device=self.device).manual_seed(seed)
             indices = torch.randperm(total_points, generator=g, device=self.device)[:n_samples]
+        elif anchor_mode == 'random':
+            # Original PINNACLE behaviour: draw n_samples random FEM points
+            # each call (no fixed seed). Provides dense coverage of the full
+            # (t, E) domain over 50k steps and reproduces the published errors.
+            indices = torch.randperm(total_points, device=self.device)[:n_samples]
         else:
             raise ValueError(
                 f"Unknown hybrid.anchor_mode={anchor_mode!r}. "
-                "Use 'default' (= 'paper' alias), 'seed', or 'position'."
+                "Use 'default' (= 'paper' alias), 'random', 'seed', or 'position'."
             )
 
         t_sel = self.fem_data['t'][indices]
