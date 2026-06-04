@@ -539,9 +539,9 @@ class PINNTrainer:
 
         # Backward pass
         total_loss = loss_dict['total']
-        # BV clamp (max=10) caps film_physics at ~1e11 for worst-case inits; threshold
-        # at 1e15 catches true explosions while allowing the boundary spikes that
-        # remain after the BV fix (~1e13 range) to pass through with grad clipping.
+        # No BV clamp is applied in the physics (removed — max=10 saturated the physical
+        # voltage range and broke voltage-dependent kinetics). The 1e15 threshold here
+        # guards Adam against non-physical init spikes without altering the physics.
         _component_spike = any(
             hasattr(loss_dict.get(k), 'item') and float(loss_dict[k].item()) > 1e15
             for k in ('film_physics', 'interior', 'boundary', 'initial')
