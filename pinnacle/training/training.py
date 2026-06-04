@@ -30,6 +30,13 @@ from weighting.weighting import (
 from weighting.weighting import ALConfig
 from weighting.weighting import ALWeightManager
 from losses.losses import _extract_constraint_violations_al
+from losses.aggregator import (
+    PINNAggregator,
+    HomoscedasticAggregator,
+    UNIFORM_WEIGHTS,
+    build_aggregator,
+    AGGREGATOR_NAMES,
+)
 torch.manual_seed(995) 
 
 class PINNTrainer:
@@ -76,7 +83,7 @@ class PINNTrainer:
         self.use_al = False
         self.constraint_history = {}
         # Initialize core components
-        print("📦 Initializing PINNACLE components...")
+        print(" Initializing PINNACLE components...")
         self.networks = NetworkManager(config, device)
         self.physics = ElectrochemicalPhysics(config, device)
 
@@ -154,20 +161,29 @@ class PINNTrainer:
             self.inverse_obs = self.sampler.sample_inverse_observations()
             if self.inverse_obs is None:
                 raise RuntimeError("inverse.enabled=true but FEM data unavailable; cannot sample observations.")
+            # Cast cached observations to the model's dtype so they are
+            # compatible with float64 network weights (E6 uses float64).
+            _model_dtype = next(iter(self.networks.get_all_parameters())).dtype
+            self.inverse_obs = {k: v.to(dtype=_model_dtype, device=self.device)
+                                for k, v in self.inverse_obs.items()}
             n = int(self.inverse_obs['t'].shape[0])
-            print(f"🔬 Inverse observations cached: N={n} points at voltages "
+            print(f" Inverse observations cached: N={n} points at voltages "
                   f"{sorted(set(self.inverse_obs['E'].view(-1).tolist()))}")
 
-        print(f"✅ Initialization complete!")
-        print(f"📊 Total parameters: {self.total_params:,}")
-        print(f"⚖️  Loss weighting strategy: {self.weighting_strategy}")
+        print(f" Initialization complete!")
+        print(f" Total parameters: {self.total_params:,}")
+        print(f"  Loss weighting strategy: {self.weighting_strategy}")
+
+    # Strategies handled by the legacy NTK/AL path.
+    _LEGACY_STRATEGIES = {'ntk', 'hybrid_ntk', 'hybrid_ntk_batch', 'AL', 'None', 'batch_size', 'uniform'}
 
     def _setup_loss_weighting(self):
         """Setup the loss weighting strategy based on configuration."""
+        self.aggregator: Optional[PINNAggregator] = None
 
-        if self.weighting_strategy == 'ntk':
+        if self.weighting_strategy in self._LEGACY_STRATEGIES and self.weighting_strategy == 'ntk':
             # Setup NTK weight manager
-            print("🧠 Setting up NTK-based automatic loss weighting...")
+            print(" Setting up NTK-based automatic loss weighting...")
             self.ntk_manager = setup_ntk_weighting(
                 self.networks,
                 self.physics,
@@ -183,7 +199,7 @@ class PINNTrainer:
             self.ntk_manager = setup_ntk_weighting(self.networks, self.physics, self.sampler, self.config)
             self.loss_weights = create_loss_weights(self.config)
         elif self.weighting_strategy == "AL":
-            print("🔗 Setting up Augmented Lagrangian loss weighting...")
+            print(" Setting up Augmented Lagrangian loss weighting...")
             # Setup AL manager
             self.al_config = ALConfig(
             beta=self.config.training.get('al_beta', 100.0),
@@ -209,24 +225,41 @@ class PINNTrainer:
             self.al_metrics_history = {
                 'penalty_term': [], 'lagrangian_term': [], 'constraint_satisfaction': []
             }
-        else:
-            # Use static weighting strategy
+        elif self.weighting_strategy in self._LEGACY_STRATEGIES:
+            # uniform / batch_size / None / other legacy static strategies
             self.loss_weights = create_loss_weights(self.config)
             self.ntk_manager = None
             self.ntk_weights = None
+        else:
+            # ── Unified aggregator path ───────────────────────────────────
+            if self.weighting_strategy not in AGGREGATOR_NAMES:
+                raise ValueError(
+                    f"Unknown weight_strat '{self.weighting_strategy}'. "
+                    f"Choose from legacy {sorted(self._LEGACY_STRATEGIES)} "
+                    f"or aggregator {AGGREGATOR_NAMES}."
+                )
+            print(f"  Building '{self.weighting_strategy}' loss aggregator...")
+            self.aggregator = build_aggregator(
+                self.weighting_strategy,
+                self.config,
+                self.networks,
+                self.physics,
+                self.sampler,
+                self.device,
+            )
+            self.loss_weights = UNIFORM_WEIGHTS
+            self.ntk_manager = None
+            self.ntk_weights = None
 
-        print(f"📊 Initial loss weights: {self.loss_weights}")
+        print(f" Initial loss weights: {self.loss_weights}")
 
 
-    def save_ntk_weights(self,updated_weights):
+    def save_ntk_weights(self, updated_weights):
         """Store updated weights in list for plotting"""
-        self.ntk_manager.ntk_weight_distributions["cv_pde"].append(updated_weights['cv_pde'].item())
-        self.ntk_manager.ntk_weight_distributions["av_pde"].append(updated_weights['av_pde'].item())
-        self.ntk_manager.ntk_weight_distributions["h_pde"].append(updated_weights['h_pde'].item())
-        self.ntk_manager.ntk_weight_distributions["poisson_pde"].append(updated_weights['poisson_pde'].item())
-        self.ntk_manager.ntk_weight_distributions["boundary"].append(updated_weights['boundary'].item())
-        self.ntk_manager.ntk_weight_distributions["initial"].append(updated_weights['initial'].item())
-        self.ntk_manager.ntk_weight_distributions["film_physics"].append(updated_weights['film_physics'].item())
+        def _f(v):
+            return v.item() if isinstance(v, torch.Tensor) else float(v)
+        for key in ("cv_pde", "av_pde", "h_pde", "poisson_pde", "boundary", "initial", "film_physics"):
+            self.ntk_manager.ntk_weight_distributions[key].append(_f(updated_weights[key]))
 
         return
     def _create_optimizer(self) -> torch.optim.Optimizer:
@@ -238,7 +271,10 @@ class PINNTrainer:
         otherwise pull these parameters toward zero, biasing the recovery.
         """
         optimizer_config = self.config['optimizer']['adam']
-        network_params = self.networks.get_all_parameters()
+        network_params = list(self.networks.get_all_parameters())
+        # HomoscedasticAggregator has learnable log_sigma that must be optimised.
+        if isinstance(getattr(self, 'aggregator', None), HomoscedasticAggregator):
+            network_params = network_params + list(self.aggregator.parameters())
 
         param_groups = [{
             'params': network_params,
@@ -254,7 +290,7 @@ class PINNTrainer:
                 'weight_decay': 0.0,
                 'lr': float(inverse_cfg.get('lr_params', optimizer_config['lr'] * 0.1)),
             })
-            print(f"🔬 Inverse mode: {len(inv_params)} learnable physics parameter(s) "
+            print(f" Inverse mode: {len(inv_params)} learnable physics parameter(s) "
                   f"with weight_decay=0, lr={param_groups[-1]['lr']:.2e}")
 
         optimizer = optim.AdamW(
@@ -302,6 +338,11 @@ class PINNTrainer:
         Returns:
             Tuple of all sampled points for loss computation
         """
+        _dtype = next(iter(self.networks.get_all_parameters())).dtype
+
+        def _cast(t):
+            return t.to(dtype=_dtype) if t is not None else None
+
         # Sample different types of points
 
         if self.config.sampling.strat == "Uniform":
@@ -311,23 +352,22 @@ class PINNTrainer:
             t_film, E_film = self.sampler.sample_film_physics_points()
             fem_data = self.sampler.sample_fem_data(self.config.hybrid.fem_batch_size) if self.config.hybrid.use_data else None
 
-            return (x_interior, t_interior, E_interior,
-                x_boundary, t_boundary, E_boundary,
-                x_initial, t_initial, E_initial,
-                t_film, E_film,fem_data)
+            return (_cast(x_interior), _cast(t_interior), _cast(E_interior),
+                _cast(x_boundary), _cast(t_boundary), _cast(E_boundary),
+                _cast(x_initial), _cast(t_initial), _cast(E_initial),
+                _cast(t_film), _cast(E_film),
+                {k: _cast(v) for k, v in fem_data.items()} if fem_data is not None else None)
 
         elif self.config.sampling.strat == "Adaptive":
-            # Purely adaptive sampling - no regular sampling
             adaptive_interior = self.sampler.get_interior_points()
             adaptive_boundary = self.sampler.get_boundary_points()
             adaptive_initial = self.sampler.get_initial_points()
             adaptive_film = self.sampler.get_film_points()
-  
-            
-            return (adaptive_interior[0], adaptive_interior[1], adaptive_interior[2],
-                    adaptive_boundary[0], adaptive_boundary[1], adaptive_boundary[2],
-                    adaptive_initial[0], adaptive_initial[1], adaptive_initial[2],
-                    adaptive_film[0], adaptive_film[1])
+
+            return (_cast(adaptive_interior[0]), _cast(adaptive_interior[1]), _cast(adaptive_interior[2]),
+                    _cast(adaptive_boundary[0]), _cast(adaptive_boundary[1]), _cast(adaptive_boundary[2]),
+                    _cast(adaptive_initial[0]), _cast(adaptive_initial[1]), _cast(adaptive_initial[2]),
+                    _cast(adaptive_film[0]), _cast(adaptive_film[1]))
 
     def _update_loss_weights(self):
         """Update loss weights using the configured strategy."""
@@ -340,7 +380,7 @@ class PINNTrainer:
                 self.save_ntk_weights(updated_weights)
         elif self.weighting_strategy == "hybrid_ntk_batch" and self.current_step>= self.ntk_steps:
             if self.current_step == self.ntk_steps:
-                print(f"🔄 SWITCHING: NTK → Batch Size Weighting at step {self.current_step}")
+                print(f" SWITCHING: NTK → Batch Size Weighting at step {self.current_step}")
                 self.current_weighting_mode = 'batch_size'
                 self.ntk_weights = None  # Clear NTK weights
                 # Set batch size weights
@@ -351,7 +391,7 @@ class PINNTrainer:
                     'initial': 1.0 / batch_config.get('IC', 1),
                     'film_physics': 1.0 / batch_config.get('L', 1)
                 }
-                print(f"📊 New batch size weights: {self.loss_weights}")
+                print(f" New batch size weights: {self.loss_weights}")
                 return 
         else:
             # Clear NTK weights if not using NTK strategy
@@ -432,6 +472,10 @@ class PINNTrainer:
             loss_dict['obs_loss'] = obs_loss
             loss_dict['total'] = loss_dict['total'] + obs_loss
 
+        # Unified aggregator path: replace total with aggregator-weighted sum.
+        if self.aggregator is not None:
+            loss_dict['total'] = self.aggregator.aggregate(loss_dict, self.current_step)
+
         return loss_dict
     
     def _collect_current_points_and_residuals(self, networks):
@@ -495,14 +539,24 @@ class PINNTrainer:
 
         # Backward pass
         total_loss = loss_dict['total']
+        # BV clamp (max=10) caps film_physics at ~1e11 for worst-case inits; threshold
+        # at 1e13 catches only true explosions that somehow bypass the clamp.
+        _component_spike = any(
+            hasattr(loss_dict.get(k), 'item') and float(loss_dict[k].item()) > 1e13
+            for k in ('film_physics', 'interior', 'boundary', 'initial')
+        )
+        _skip = not total_loss.isfinite() or _component_spike
+        if _skip:
+            self.optimizer.zero_grad()
+            return {k: float(v.item()) if hasattr(v, 'item') else float(v)
+                    for k, v in loss_dict.items()}
         total_loss.backward()
 
-        #gradient_clipping
-        torch.nn.utils.clip_grad_norm_(self.networks.get_all_parameters(), max_norm=1.0) 
+        torch.nn.utils.clip_grad_norm_(self.networks.get_all_parameters(), max_norm=0.1)
 
         if self.use_al:
             # Flip gradients for multipliers (ascent)
-            torch.nn.utils.clip_grad_norm_(self.al_manager.get_multiplier_parameters(), max_norm=1.0)
+            torch.nn.utils.clip_grad_norm_(self.al_manager.get_multiplier_parameters(), max_norm=0.1)
             for param in self.al_manager.get_multiplier_parameters():
                 if param.grad is not None:
                     param.grad *= -1
@@ -600,6 +654,13 @@ class PINNTrainer:
                       f"BC={self.ntk_weights.get('boundary'):.3f}, "
                       f"IC={self.ntk_weights.get('initial'):.3f}, "
                       f"Film={self.ntk_weights.get('film_physics'):.10f}")
+            elif self.aggregator is not None:
+                w = self.aggregator.current_weights or {}
+                print(f"Aggregator ({self.weighting_strategy}) weights: "
+                      f"Interior={w.get('interior', 1.0):.4f}, "
+                      f"Boundary={w.get('boundary', 1.0):.4f}, "
+                      f"Initial={w.get('initial', 1.0):.4f}, "
+                      f"Film={w.get('film_physics', 1.0):.4f}")
             elif self.weighting_strategy != 'uniform':
                 print(f"Standard weights: Interior={self.loss_weights['interior']:.3f}, "
                       f"Boundary={self.loss_weights['boundary']:.3f}, "
@@ -755,8 +816,8 @@ class PINNTrainer:
         Returns:
             Complete loss history for analysis
         """
-        print(f"🚀 Starting PINNACLE training for {self.max_steps} steps...")
-        print(f"⚖️  Using {self.weighting_strategy} loss weighting strategy")
+        print(f" Starting PINNACLE training for {self.max_steps} steps...")
+        print(f"  Using {self.weighting_strategy} loss weighting strategy")
 
         # Start timing
         self.start_time = time.time()
@@ -835,35 +896,54 @@ class PINNTrainer:
         out_path = os.path.join(self.output_dir, 'timing.json')
         with open(out_path, 'w') as f:
             json.dump(summary, f, indent=2)
-        print(f"⏱️  Timing summary written to {out_path}")
+        print(f"⏱  Timing summary written to {out_path}")
 
     def _finish_training(self) -> None:
         """Complete training and print summary."""
         elapsed_time = time.time() - self.start_time
         final_loss = self.loss_history['total'][-1] if self.loss_history['total'] else float('inf')
 
-        print(f"\n✅ Training completed!")
-        print(f"📊 Final loss: {final_loss:.6f}")
-        print(f"🏆 Best loss: {self.best_loss:.6f}")
-        print(f"⏱️  Training time: {elapsed_time / 60:.1f} minutes")
-        print(f"🎯 Training speed: {self.max_steps / (elapsed_time / 60):.1f} steps/minute")
+        print(f"\n Training completed!")
+        print(f" Final loss: {final_loss:.6f}")
+        print(f" Best loss: {self.best_loss:.6f}")
+        print(f"⏱  Training time: {elapsed_time / 60:.1f} minutes")
+        print(f" Training speed: {self.max_steps / (elapsed_time / 60):.1f} steps/minute")
 
         if self.use_al:
-            print(f"🔗 AL Method: β={self.al_manager.config.beta}")
-            print(f"⚖️  Final constraint satisfaction: [show constraint metrics]")
+            print(f" AL Method: β={self.al_manager.config.beta}")
+            print(f"  Final constraint satisfaction: [show constraint metrics]")
         elif self.weighting_strategy == 'ntk' and self.ntk_weights is not None:
-            print(f"⚖️  Final NTK weights: {self.ntk_weights}")
+            print(f"  Final NTK weights: {self.ntk_weights}")
         else:
-            print(f"⚖️  Final weights: {self.loss_weights}")
+            print(f"  Final weights: {self.loss_weights}")
 
         # Save final checkpoint
         self.save_checkpoint("final_model")
 
+        # Write losses.txt — tab-separated, one row per recorded step
+        _LOSS_COLS = [
+            'total', 'interior', 'boundary', 'initial', 'film_physics',
+            'weighted_cv_pde', 'weighted_av_pde', 'weighted_h_pde', 'weighted_poisson_pde',
+            'weighted_cv_ic', 'weighted_av_ic', 'weighted_poisson_ic', 'weighted_h_ic', 'weighted_L_ic',
+            'weighted_cv_mf_bc', 'weighted_av_mf_bc', 'weighted_u_mf_bc',
+            'weighted_cv_fs_bc', 'weighted_av_fs_bc', 'weighted_u_fs_bc', 'weighted_h_fs_bc',
+        ]
+        losses_path = os.path.join(self.output_dir, "losses.txt")
+        n_rows = len(self.loss_history['total'])
+        with open(losses_path, 'w') as _f:
+            _f.write('step\t' + '\t'.join(_LOSS_COLS) + '\n')
+            for _i in range(n_rows):
+                _row = [str(_i + 1)]
+                for _c in _LOSS_COLS:
+                    _vals = self.loss_history.get(_c, [])
+                    _row.append(f'{_vals[_i]:.6e}' if _i < len(_vals) else 'nan')
+                _f.write('\t'.join(_row) + '\n')
+
         # Load best model for inference
         if self.best_checkpoint_path:
-            print(f"\n🔄 Loading best checkpoint for inference...")
+            print(f"\n Loading best checkpoint for inference...")
             self.load_checkpoint(f"{self.best_checkpoint_path}.pt")
-            print(f"✅ Using best model (loss: {self.best_loss:.6f})")
+            print(f" Using best model (loss: {self.best_loss:.6f})")
 
     def evaluate(self) -> Dict[str, float]:
         """
@@ -885,7 +965,7 @@ class PINNTrainer:
     def set_loss_weights(self, weights: Dict[str, float]) -> None:
         """Set loss weights manually (overrides automatic weighting)."""
         self.loss_weights = weights
-        print(f"📊 Updated loss weights: {weights}")
+        print(f" Updated loss weights: {weights}")
 
     def get_ntk_diagnostics(self) -> Dict[str, Any]:
         """Get NTK weighting diagnostics if using NTK strategy."""

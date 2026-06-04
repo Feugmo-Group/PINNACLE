@@ -414,13 +414,13 @@ class ElectrochemicalPhysics:
         F_RT = self.constants.F * self.scales.phic / (self.constants.R * self.constants.T)
 
         # k₁: Cation vacancy generation at m/f interface
-        k1 = self.kinetics.k1_0 * torch.exp(self.kinetics.alpha_cv * 3 * F_RT * u_mf)
+        k1 = self.kinetics.k1_0 * torch.exp(torch.clamp(self.kinetics.alpha_cv * 3 * F_RT * u_mf, max=10.0))
 
         # k₂: Anion vacancy generation at m/f interface
-        k2 = self.kinetics.k2_0 * torch.exp(self.kinetics.alpha_av * 2 * F_RT * u_mf)
+        k2 = self.kinetics.k2_0 * torch.exp(torch.clamp(self.kinetics.alpha_av * 2 * F_RT * u_mf, max=10.0))
 
         # k₃: Cation vacancy consumption at f/s interface
-        k3 = self.k3_0 * torch.exp(self.kinetics.beta_cv * (3 - self.domain.delta3) * F_RT * u_fs)
+        k3 = self.k3_0 * torch.exp(torch.clamp(self.kinetics.beta_cv * (3 - self.domain.delta3) * F_RT * u_fs, max=10.0))
 
         # k₄: Chemical reaction (potential independent)
         k4 = self.kinetics.k4_0
@@ -430,10 +430,10 @@ class ElectrochemicalPhysics:
 
         # k_tp: Hole transfer at f/s interface
         c_h_fs = networks['h'](inputs_fs)
-        ktp = self.kinetics.ktp_0 * c_h_fs * self.scales.chc * torch.exp(self.kinetics.alpha_tp * F_RT * u_fs)
+        ktp = self.kinetics.ktp_0 * c_h_fs * self.scales.chc * torch.exp(torch.clamp(self.kinetics.alpha_tp * F_RT * u_fs, max=10.0))
 
         # k_O₂: Oxygen evolution (not used in main equations but included)
-        ko2 = self.kinetics.ko2_0 * torch.exp(self.kinetics.a_par * 2 * F_RT * (E - self.kinetics.phi_O2_eq))
+        ko2 = self.kinetics.ko2_0 * torch.exp(torch.clamp(self.kinetics.a_par * 2 * F_RT * (E - self.kinetics.phi_O2_eq), max=10.0))
 
         return k1, k2, k3, k4, k5, ktp, ko2
 
