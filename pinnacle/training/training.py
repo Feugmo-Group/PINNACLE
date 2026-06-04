@@ -540,9 +540,10 @@ class PINNTrainer:
         # Backward pass
         total_loss = loss_dict['total']
         # BV clamp (max=10) caps film_physics at ~1e11 for worst-case inits; threshold
-        # at 1e13 catches only true explosions that somehow bypass the clamp.
+        # at 1e15 catches true explosions while allowing the boundary spikes that
+        # remain after the BV fix (~1e13 range) to pass through with grad clipping.
         _component_spike = any(
-            hasattr(loss_dict.get(k), 'item') and float(loss_dict[k].item()) > 1e13
+            hasattr(loss_dict.get(k), 'item') and float(loss_dict[k].item()) > 1e15
             for k in ('film_physics', 'interior', 'boundary', 'initial')
         )
         _skip = not total_loss.isfinite() or _component_spike
