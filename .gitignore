@@ -177,3 +177,7 @@ cython_debug/
 outputs/
 
 .png
+
+# Claude Code / assistant artifacts
+CLAUDE.md
+.claude/

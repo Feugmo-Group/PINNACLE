@@ -55,23 +55,32 @@ Installed automatically by the commands above:
 
 ---
 
-## Quick start
+## Train a model
+
+A single command trains the model with the defaults in `conf/config.yaml`:
 
 ```bash
-# default run (reads conf/config.yaml)
 python -m pinnacle.main
-
-# override any config value on the command line (Hydra syntax)
-python -m pinnacle.main training.max_steps=10000 training.weight_strat=uniform device=cpu
-
-# quick smoke test (small network, few steps)
-python -m pinnacle.main training.max_steps=2000 arch.potential.layer_size=10 arch.potential.hidden_layers=3
 ```
 
-Outputs go to `outputs/experiments/<name>/<timestamp>/` and contain checkpoints,
-plots, and a Hydra config snapshot.
+Everything is configured through Hydra, so any setting can be overridden on the
+command line as `key=value`:
 
-Reproduce the main FEM-anchored hybrid result:
+```bash
+# name the run, pick a weighting strategy, set the step budget, choose the device
+python -m pinnacle.main experiment.name=my_run training.weight_strat=ntk \
+    training.max_steps=10000 device=cuda
+
+# fast smoke test (small network, few steps) — finishes in a minute or two
+python -m pinnacle.main training.max_steps=2000 \
+    arch.potential.layer_size=10 arch.potential.hidden_layers=3 device=cpu
+```
+
+Each run writes to `outputs/experiments/<experiment.name>/<timestamp>/`, containing
+`checkpoints/` (including `best_model.pt`), `plots/` (film-thickness vs. FEM, loss
+curves, etc.), the resolved Hydra config under `.hydra/`, and `pinnacle.log`.
+
+Reproduce the main FEM-anchored hybrid result (NTK weighting + one FEM anchor):
 
 ```bash
 python -m pinnacle.main training.weight_strat=ntk hybrid.use_data=true \
@@ -79,6 +88,50 @@ python -m pinnacle.main training.weight_strat=ntk hybrid.use_data=true \
 ```
 
 The FEM reference data used as anchors live in `pinnacle/FEM/`.
+
+---
+
+## Reproducing the paper experiments
+
+The `scripts/` folder holds the drivers for every experiment in the paper, plus the
+tooling that turns the resulting runs into figures and tables. The experiment drivers
+launch training inside Docker to match the paper's GPU environment; set
+`DOCKER_IMAGE` to point at your local PyTorch image. The figure/analysis scripts are
+plain Python and run locally once the experiments have finished.
+
+**Experiment drivers** (`scripts/run_*.sh`):
+
+| Script | What it produces |
+|---|---|
+| `run_e1.sh` | Loss-weighting ablation: NTK vs. uniform vs. batch-size (timing + GPU memory) |
+| `run_e2.sh` | Per-interface boundary-condition residuals over training |
+| `run_e3.sh` | Anchor robustness across random-anchor seeds |
+| `run_e3b_positions.sh` | Anchor robustness across a systematic `(t,E)` position sweep |
+| `run_e4e5_fixed.sh` | Data-efficiency sweep (number of FEM anchors) and noise sweep |
+| `run_e5_n10.sh` | Noise robustness at a fixed budget of 10 anchors |
+| `run_e6.sh` | Inverse problem: assimilate sparse `L(t)` and target `k3_0`, `D_CV` |
+| `run_e7.sh` | Wall-clock cost comparison vs. FEM |
+| `run_w7.sh` | Reproducibility across random seeds |
+| `run_revision.sh` | Runs the full set of experiments in order |
+
+**Figures and tables** (run locally after the experiments):
+
+| Script | What it produces |
+|---|---|
+| `make_e4e5_figures.py` | Data-efficiency and noise-robustness figures |
+| `make_e2_figure.py` | Boundary-residual figure |
+| `aggregate_revision_results.py` | Summary tables (whole-curve relative-L2 errors) |
+| `compute_table1.py` | Main results table |
+
+```bash
+# example: run the data-efficiency / noise sweep, then build the figures
+bash scripts/run_e4e5_fixed.sh
+python scripts/make_e4e5_figures.py
+```
+
+The directory also contains variant and exploratory drivers (`run_*_v2.sh`,
+`probe_*.sh`, `run_test_*.sh`) kept for completeness; the table above lists the
+canonical entry points.
 
 ---
 
