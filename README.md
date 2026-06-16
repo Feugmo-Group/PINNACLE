@@ -19,6 +19,21 @@ cd PINNACLE
 
 ### With uv (recommended)
 
+First install uv (a fast Python package manager) if you don't have it:
+
+```bash
+# macOS / Linux
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Windows (PowerShell)
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+
+# or via pip / pipx / Homebrew
+pip install uv            # or: pipx install uv  /  brew install uv
+```
+
+Then set up the project:
+
 ```bash
 uv sync
 ```
@@ -30,7 +45,8 @@ For a specific CUDA build of PyTorch, add the matching wheel index:
 uv sync --extra-index-url https://download.pytorch.org/whl/cu124   # or cu121, cu118, cpu
 ```
 
-Then run commands with `uv run`, e.g. `uv run python -m pinnacle.main`.
+`uv run <command>` then runs inside that environment without activating it manually —
+all commands below use `uv run`.
 
 ### With pip
 
@@ -60,7 +76,7 @@ Installed automatically by the commands above:
 A single command trains the model with the defaults in `conf/config.yaml`:
 
 ```bash
-python -m pinnacle.main
+uv run python -m pinnacle.main
 ```
 
 Everything is configured through Hydra, so any setting can be overridden on the
@@ -68,11 +84,11 @@ command line as `key=value`:
 
 ```bash
 # name the run, pick a weighting strategy, set the step budget, choose the device
-python -m pinnacle.main experiment.name=my_run training.weight_strat=ntk \
+uv run python -m pinnacle.main experiment.name=my_run training.weight_strat=ntk \
     training.max_steps=10000 device=cuda
 
 # fast smoke test (small network, few steps) — finishes in a minute or two
-python -m pinnacle.main training.max_steps=2000 \
+uv run python -m pinnacle.main training.max_steps=2000 \
     arch.potential.layer_size=10 arch.potential.hidden_layers=3 device=cpu
 ```
 
@@ -83,7 +99,7 @@ curves, etc.), the resolved Hydra config under `.hydra/`, and `pinnacle.log`.
 Reproduce the main FEM-anchored hybrid result (NTK weighting + one FEM anchor):
 
 ```bash
-python -m pinnacle.main training.weight_strat=ntk hybrid.use_data=true \
+uv run python -m pinnacle.main training.weight_strat=ntk hybrid.use_data=true \
     hybrid.anchor_t=150000 hybrid.anchor_E=0.1 training.max_steps=50000
 ```
 
@@ -126,7 +142,7 @@ plain Python and run locally once the experiments have finished.
 ```bash
 # example: run the data-efficiency / noise sweep, then build the figures
 bash scripts/run_e4e5_fixed.sh
-python scripts/make_e4e5_figures.py
+uv run python scripts/make_e4e5_figures.py
 ```
 
 The directory also contains variant and exploratory drivers (`run_*_v2.sh`,
@@ -173,7 +189,7 @@ Common knobs:
 Print the resolved config without training:
 
 ```bash
-python -m pinnacle.main --cfg job
+uv run python -m pinnacle.main --cfg job
 ```
 
 ---
