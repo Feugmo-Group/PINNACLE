@@ -28,6 +28,7 @@ docker run --rm -i --init \
   --user="$(id -u):$(id -g)" \
   --volume="$REPO_DIR:/app" \
   --workdir="/app" \
+  --env CUDA_MEM_FRACTION="${CUDA_MEM_FRACTION:-0.5}" \
   "$DOCKER_IMAGE" \
   bash -s << 'CONTAINER_EOF'
 set -euo pipefail

@@ -48,12 +48,13 @@ for SIGMA in "${SIGMAS[@]}"; do
     for SEED in "${SEEDS[@]}"; do
             echo "--- E5: sigma=${SIGMA} seed=${SEED} strat=ntk ---"
             PYTHONPATH=/app/pinnacle python -m pinnacle.main \
-                training.weight_strat="ntk" \
+                precision=float64 \
+                training.weight_strat="ntk_l2" \
                 training.max_steps="${STEPS}" \
                 hybrid.anchor_mode=seed \
                 hybrid.noise_sigma="${SIGMA}" \
                 hybrid.anchor_seed="${SEED}" \
-                "experiment.name=e5_${LABEL}_seed${SEED}_ntk"
+                "experiment.name=e5_${LABEL}_seed${SEED}_ntk_l2" || true
     done
 done
 

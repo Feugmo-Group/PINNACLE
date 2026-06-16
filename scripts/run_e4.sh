@@ -46,12 +46,13 @@ for N in "${N_VALUES[@]}"; do
     for SEED in "${SEEDS[@]}"; do
             echo "--- E4: N=${N} seed=${SEED} strat=ntk ---"
             PYTHONPATH=/app/pinnacle python -m pinnacle.main \
-                training.weight_strat="ntk" \
+                precision=float64 \
+                training.weight_strat="ntk_l2" \
                 training.max_steps="${STEPS}" \
                 hybrid.n_data_points="${N}" \
                 hybrid.anchor_mode=seed \
                 hybrid.anchor_seed="${SEED}" \
-                "experiment.name=e4_N${N}_seed${SEED}_ntk"
+                "experiment.name=e4_N${N}_seed${SEED}_ntk_l2" || true
     done
 done
 

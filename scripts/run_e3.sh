@@ -53,11 +53,12 @@ if [[ "$PART" == *A* ]]; then
     for SEED in $(seq 0 29); do
             echo "--- E3-A seed=${SEED} strat=ntk ---"
             PYTHONPATH=/app/pinnacle python -m pinnacle.main \
-                training.weight_strat="ntk" \
+                precision=float64 \
+                training.weight_strat="ntk_l2" \
                 training.max_steps="${STEPS}" \
                 hybrid.anchor_mode=seed \
                 hybrid.anchor_seed="${SEED}" \
-                "experiment.name=e3a_seed${SEED}_ntk"
+                "experiment.name=e3a_seed${SEED}_ntk_l2" || true
     done
 fi
 
@@ -85,12 +86,13 @@ if [[ "$PART" == *B* ]]; then
         T_VAL="${REST%%:*}"; E_VAL="${REST#*:}"
             echo "--- E3-B ${LABEL} (t=${T_VAL}, E=${E_VAL}) strat=ntk ---"
             PYTHONPATH=/app/pinnacle python -m pinnacle.main \
-                training.weight_strat="ntk" \
+                precision=float64 \
+                training.weight_strat="ntk_l2" \
                 training.max_steps="${STEPS}" \
                 hybrid.anchor_mode=position \
                 hybrid.anchor_t="${T_VAL}" \
                 hybrid.anchor_E="${E_VAL}" \
-                "experiment.name=e3b_${LABEL}_ntk"
+                "experiment.name=e3b_${LABEL}_ntk_l2" || true
     done
 fi
 
