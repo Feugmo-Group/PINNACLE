@@ -13,33 +13,48 @@ from gradients.gradients import GradientComputer, GradientConfig
 class InverseParameters(nn.Module):
     """Container for learnable physics parameters in inverse-problem mode.
 
-    Recovery is performed in log10-space (``log_k3_0`` and ``log_D_cv``
+    Recovery is performed in log10-space (``log_k2_0`` and ``log_D_cv``
     are the actual nn.Parameters). This serves three purposes:
 
       1. Guarantees positivity of the recovered physical parameters
          throughout training.
       2. Makes the optimisation scale-invariant: a single Adam learning
          rate works for parameters spanning many orders of magnitude
-         (k3_0 ~ 1e-9, D_cv ~ 1e-21).
+         (k2_0 ~ 1e-6, D_cv ~ 1e-21).
       3. Naturally exposes the parameter-stiffness contrast the inverse
-         experiment is designed to quantify (paper revision E6).
+         experiment is designed to quantify (paper revision E6): ``k2_0``
+         enters the film-growth law through an exponential Butler--Volmer
+         term (boundary-stiff), while ``D_cv`` enters the interior
+         Nernst--Planck operator linearly (interior-mild).
 
-    The physical-unit values ``k3_0`` and ``D_cv`` are computed on the
+    The physical-unit values ``k2_0`` and ``D_cv`` are computed on the
     fly as ``10 ** log_param`` via @property, so optimiser updates to
     the log parameters propagate immediately through the residuals.
     """
 
-    def __init__(self, k3_0_init: float, D_cv_init: float):
+    def __init__(self, unknown_params, k2_0_init: float, k5_0_init: float, D_cv_init: float):
         super().__init__()
         # nn.Parameter() must be created from a tensor of the correct
         # dtype; default float32 keeps memory consistent with the networks.
+        # Only the parameters listed in ``unknown_params`` are made learnable;
+        # joint recovery of several stiff/ill-conditioned parameters at once is
+        # unstable, so the default is to recover one at a time (see config).
         import math
-        self.log_k3_0 = nn.Parameter(torch.tensor(math.log10(float(k3_0_init))))
-        self.log_D_cv = nn.Parameter(torch.tensor(math.log10(float(D_cv_init))))
+        self.unknown = set(unknown_params)
+        if 'k2_0' in self.unknown:
+            self.log_k2_0 = nn.Parameter(torch.tensor(math.log10(float(k2_0_init))))
+        if 'k5_0' in self.unknown:
+            self.log_k5_0 = nn.Parameter(torch.tensor(math.log10(float(k5_0_init))))
+        if 'D_cv' in self.unknown:
+            self.log_D_cv = nn.Parameter(torch.tensor(math.log10(float(D_cv_init))))
 
     @property
-    def k3_0(self) -> torch.Tensor:
-        return torch.pow(10.0, self.log_k3_0)
+    def k2_0(self) -> torch.Tensor:
+        return torch.pow(10.0, self.log_k2_0)
+
+    @property
+    def k5_0(self) -> torch.Tensor:
+        return torch.pow(10.0, self.log_k5_0)
 
     @property
     def D_cv(self) -> torch.Tensor:
@@ -200,7 +215,9 @@ class ElectrochemicalPhysics:
         self.inverse_params = None
         if self.inverse_enabled:
             self.inverse_params = InverseParameters(
-                k3_0_init=inverse_cfg['k3_0_init'],
+                unknown_params=inverse_cfg.get('unknown_params', ['k2_0']),
+                k2_0_init=inverse_cfg['k2_0_init'],
+                k5_0_init=inverse_cfg.get('k5_0_init', 7.65e-8),
                 D_cv_init=inverse_cfg['D_cv_init'],
             ).to(device)
 
@@ -213,14 +230,37 @@ class ElectrochemicalPhysics:
         self.grad_computer = GradientComputer(grad_config, device)
 
     @property
-    def k3_0(self):
-        """Transpassive dissolution rate constant (physical units).
+    def k2_0(self):
+        """Anion-vacancy generation rate constant at the m/f interface
+        (physical units).
 
-        Returns a learnable 10**log_k3_0 tensor in inverse mode, else
-        the constant float from the kinetics dataclass.
+        Returns a learnable 10**log_k2_0 tensor in inverse mode, else
+        the constant float from the kinetics dataclass. This is the
+        boundary-stiff unknown of the inverse problem: it enters the
+        film-growth law through an exponential Butler--Volmer term and
+        therefore directly governs the observable d L/d t.
         """
-        if self.inverse_enabled and self.inverse_params is not None:
-            return self.inverse_params.k3_0
+        if (self.inverse_enabled and self.inverse_params is not None
+                and 'k2_0' in self.inverse_params.unknown):
+            return self.inverse_params.k2_0
+        return self.kinetics.k2_0
+
+    @property
+    def k5_0(self):
+        """Chemical dissolution rate constant (physical units).
+
+        Returns a learnable 10**log_k5_0 tensor in inverse mode, else the
+        constant float. This is the mild (linear) counterpart to k2_0: it
+        enters the film-growth law dL/dt = Omega*(k2 - k5) linearly.
+        """
+        if (self.inverse_enabled and self.inverse_params is not None
+                and 'k5_0' in self.inverse_params.unknown):
+            return self.inverse_params.k5_0
+        return self.kinetics.k5_0
+
+    @property
+    def k3_0(self):
+        """Transpassive dissolution rate constant (physical units, constant)."""
         return self.kinetics.k3_0
 
     @property
@@ -230,7 +270,8 @@ class ElectrochemicalPhysics:
         Returns a learnable 10**log_D_cv tensor in inverse mode, else
         the constant float from the transport dataclass.
         """
-        if self.inverse_enabled and self.inverse_params is not None:
+        if (self.inverse_enabled and self.inverse_params is not None
+                and 'D_cv' in self.inverse_params.unknown):
             return self.inverse_params.D_cv
         return self.transport.D_cv
 
@@ -416,8 +457,9 @@ class ElectrochemicalPhysics:
         # k₁: Cation vacancy generation at m/f interface
         k1 = self.kinetics.k1_0 * torch.exp(self.kinetics.alpha_cv * 3 * F_RT * u_mf)
 
-        # k₂: Anion vacancy generation at m/f interface
-        k2 = self.kinetics.k2_0 * torch.exp(self.kinetics.alpha_av * 2 * F_RT * u_mf)
+        # k₂: Anion vacancy generation at m/f interface (k2_0 is the
+        # boundary-stiff learnable unknown in inverse mode; see self.k2_0)
+        k2 = self.k2_0 * torch.exp(self.kinetics.alpha_av * 2 * F_RT * u_mf)
 
         # k₃: Cation vacancy consumption at f/s interface
         k3 = self.k3_0 * torch.exp(self.kinetics.beta_cv * (3 - self.domain.delta3) * F_RT * u_fs)
@@ -425,8 +467,8 @@ class ElectrochemicalPhysics:
         # k₄: Chemical reaction (potential independent)
         k4 = self.kinetics.k4_0
 
-        # k₅: Chemical dissolution
-        k5 = self.kinetics.k5_0 * self.materials.c_H
+        # k₅: Chemical dissolution (k5_0 learnable in inverse mode; see self.k5_0)
+        k5 = self.k5_0 * self.materials.c_H
 
         # k_tp: Hole transfer at f/s interface
         c_h_fs = networks['h'](inputs_fs)

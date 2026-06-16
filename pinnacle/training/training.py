@@ -136,7 +136,7 @@ class PINNTrainer:
             'bc_cv_fs_rms': [], 'bc_av_fs_rms': [], 'bc_u_fs_rms': [], 'bc_h_fs_rms': [],
             # Inverse-problem trajectories (paper revision E6). Populated only
             # when inverse.enabled; NaN-filled otherwise.
-            'obs_loss': [], 'k3_0': [], 'D_cv': [],
+            'obs_loss': [], 'k2_0': [], 'k5_0': [], 'D_cv': [],
         }
 
         if self.use_al:
@@ -571,6 +571,20 @@ class PINNTrainer:
 
         torch.nn.utils.clip_grad_norm_(self.networks.get_all_parameters(), max_norm=0.1)
 
+        # Clip the inverse-parameter gradients separately (log-space). The raw
+        # gradient on log_k2_0 can reach O(1e6); without a guard a single
+        # non-finite gradient (when the PDE solve momentarily diverges) poisons
+        # the AdamW moment estimates and NaNs the recovered parameter for the
+        # rest of training. Skip the inverse update entirely if its gradient is
+        # not finite, so a transient network spike can't corrupt the parameter.
+        if self.inverse_enabled and self.physics.inverse_params is not None:
+            inv_ps = list(self.physics.inverse_params.parameters())
+            inv_norm = torch.nn.utils.clip_grad_norm_(inv_ps, max_norm=1.0)
+            if not torch.isfinite(inv_norm):
+                for p in inv_ps:
+                    if p.grad is not None:
+                        p.grad.zero_()
+
         if self.use_al:
             # Flip gradients for multipliers (ascent)
             torch.nn.utils.clip_grad_norm_(self.al_manager.get_multiplier_parameters(), max_norm=0.1)
@@ -601,8 +615,13 @@ class PINNTrainer:
         # Recorded every step so the recovery trajectory and ensemble
         # spread (E6-F) can be reconstructed without rerunning.
         if self.inverse_enabled and self.physics.inverse_params is not None:
-            loss_dict_float['k3_0'] = float(self.physics.inverse_params.k3_0.detach().cpu().item())
-            loss_dict_float['D_cv'] = float(self.physics.inverse_params.D_cv.detach().cpu().item())
+            unknown = self.physics.inverse_params.unknown
+            if 'k2_0' in unknown:
+                loss_dict_float['k2_0'] = float(self.physics.inverse_params.k2_0.detach().cpu().item())
+            if 'k5_0' in unknown:
+                loss_dict_float['k5_0'] = float(self.physics.inverse_params.k5_0.detach().cpu().item())
+            if 'D_cv' in unknown:
+                loss_dict_float['D_cv'] = float(self.physics.inverse_params.D_cv.detach().cpu().item())
 
         # Update training state
         self.current_step += 1

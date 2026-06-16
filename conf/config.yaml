@@ -135,16 +135,18 @@ precision: float64   # float64 required for numerical stability of Butler-Volmer
 
 inverse:
   enabled: false
-  unknown_params: [k3_0, D_cv]
-  k3_0_init: 1.0e-8         # initial guess (~2x true 4.5e-9)
+  unknown_params: [k2_0]    # recover one parameter at a time (joint k2_0+D_cv is ill-posed)
+  k2_0_init: 3.6e-5         # initial guess (10x true 3.6e-6); boundary-stiff, drives dL/dt
+  k5_0_init: 7.65e-8        # initial guess (10x true 7.65e-9); mild/linear, in dL/dt
   D_cv_init: 5.0e-21        # initial guess (~5x true 1.0e-21)
-  k3_0_bounds: [1.0e-11, 1.0e-6]
+  k2_0_bounds: [1.0e-8, 1.0e-3]
+  k5_0_bounds: [1.0e-11, 1.0e-6]
   D_cv_bounds: [1.0e-23, 1.0e-18]
   n_obs: 5                  # number of L(t) observations per voltage
   obs_voltages: [0.1]       # observed voltages; e.g. [0.1] or [0.1, 1.0]
   obs_noise_sigma: 0.0      # Gaussian multiplicative noise on observations
   lr_params: 1.0e-4         # separate Adam lr for the physics params
-  stage2_start_step: 40000  # freeze networks at this step; only k3_0/D_cv optimised after this
+  stage2_start_step: 40000  # freeze networks at this step; only k2_0/D_cv optimised after this
 # Batch sizes for different constraints
 batch_size:
   BC: 1024 # Boundary points per boundary
