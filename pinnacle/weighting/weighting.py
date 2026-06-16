@@ -94,9 +94,11 @@ def compute_minimum_batch_size(jacobian):
         # Normal coefficient of variation
         v_X = sigma_X / mu_X.abs()
     
-    # Clamp to reasonable bounds
+    # Guard against NaN (can occur with certain seeds at init) and clamp
+    if not torch.isfinite(v_X):
+        v_X = torch.tensor(1.0)
     v_X = torch.clamp(v_X, min=0.1, max=5.0)
-    
+
     min_batch_size = int(25 * (v_X ** 2))
     min_batch_size = max(min_batch_size, 32)
     min_batch_size = min(min_batch_size, len(jacobian) // 4)
@@ -343,10 +345,18 @@ class NTKWeightManager:
         # Normalize weights
         total_raw_weight = sum(raw_weights.values())
         normalization = len(raw_weights)/total_raw_weight
-        
+
         normalized_weights = {
             name: raw_weights[name] * normalization
             for name, weight in raw_weights.items()
+        }
+
+        # Clamp weights to [0.3, 3.0] — max ratio 10×. The tighter range
+        # prevents AV from monopolising gradient budget (was 41× with [0.1,5.0])
+        # while still allowing meaningful differentiation between terms.
+        normalized_weights = {
+            name: max(0.3, min(3.0, w))
+            for name, w in normalized_weights.items()
         }
 
         return normalized_weights
@@ -462,11 +472,11 @@ class ALWeightManager:
         
         # Log initialization
         total_params = sum(p.numel() for p in self.lambda_params.values())
-        print(f"🔗 AL-PINNs Multiplier Initialization:")
+        print(f" AL-PINNs Multiplier Initialization:")
         print(f"  Boundary: {len(boundary_types)} types × {n_boundary} points = {len(boundary_types) * n_boundary}")
         print(f"  Initial: {len(initial_types)} types × {n_initial} points = {len(initial_types) * n_initial}")
         print(f"  Film: 1 type × {n_film} points = {n_film}")
-        print(f"  📊 Total multiplier parameters: {total_params}")
+        print(f"   Total multiplier parameters: {total_params}")
 
         self.is_initialized = True
         

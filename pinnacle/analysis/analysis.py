@@ -71,7 +71,7 @@ from typing import Dict, Any, List, Optional, Tuple
 import os
 import torch.nn as nn
 from networks.networks import NetworkManager
-from physics.physics import ElectrochemicalPhysics  
+from physics.physics import ElectrochemicalPhysics
 from training.training import PINNTrainer
 from sampling.sampling import CollocationSampler
 from losses.losses import compute_total_loss
@@ -79,6 +79,11 @@ from weighting.weighting import NTKWeightManager
 import matplotlib.gridspec as gridspec
 from tqdm import tqdm
 from scipy.stats import gaussian_kde
+try:
+    from utils.plotting import apply_pub_style
+except ImportError:
+    def apply_pub_style():
+        pass
 
 # Global figure-font defaults (paper revision: addresses R2.6 on
 # undersized figure fonts). Set once at module import so every figure
@@ -419,7 +424,7 @@ def create_loss_landscape(networks:Dict[str,nn.Module], physics:ElectrochemicalP
     ]
     loss_landscapes = {comp: np.zeros((num_of_points,num_of_points)) for comp in loss_components}
 
-    fem_data = sampler.last_fem_data
+    fem_data = getattr(sampler, 'last_fem_data', None)  # None for pure-physics (use_data=False) runs
     for row in tqdm(range(num_of_points)):
         for col in range(num_of_points):
             step_x = xcoord_mesh[row][col]
@@ -514,7 +519,7 @@ def plot_ntk_weight_densities(ntk_weight_manager:NTKWeightManager, save_path: Op
     
     distributions = ntk_weight_manager.ntk_weight_distributions
 
-    print("🔬 Generating NTK weight density plots...")
+    print(" Generating NTK weight density plots...")
 
     plt.figure(figsize=(10, 6))
 
@@ -525,12 +530,16 @@ def plot_ntk_weight_densities(ntk_weight_manager:NTKWeightManager, save_path: Op
     for i, comp in enumerate(component_names):
         if comp in distributions and len(distributions[comp]) > 1:
             weights = np.array(distributions[comp])
-            kde = gaussian_kde(weights)
-            x_range = np.linspace(weights.min(), weights.max(), 100)
-            density = kde(x_range)
-            
-            plt.plot(x_range, density, color=colors[i], 
-                    linewidth=2, label=comp, alpha=0.8)
+            try:
+                kde = gaussian_kde(weights)
+                x_range = np.linspace(weights.min(), weights.max(), 100)
+                density = kde(x_range)
+                plt.plot(x_range, density, color=colors[i],
+                        linewidth=2, label=comp, alpha=0.8)
+            except np.linalg.LinAlgError:
+                # weights are constant (singular covariance) — plot a vertical line instead
+                plt.axvline(x=weights.mean(), color=colors[i],
+                           linewidth=2, label=comp, alpha=0.8)
 
     plt.xlabel('NTK Weight Values')
     plt.ylabel('Density')
@@ -582,9 +591,9 @@ def plot_top_k_worst(points_dict: Dict[str, torch.Tensor],
     if current_potential is None and 'film' in points_dict:
         current_potential = points_dict['film'][0, 1].item()  # E value for film
     
-    print(f"🎯 Plotting top {k} worst points...")
+    print(f" Plotting top {k} worst points...")
     if current_potential is not None:
-        print(f"  📊 Current potential: E = {current_potential:.3f}")
+        print(f"   Current potential: E = {current_potential:.3f}")
     
     fig, ax = plt.subplots(figsize=(12, 8))
     
@@ -686,7 +695,7 @@ def plot_top_k_worst(points_dict: Dict[str, torch.Tensor],
                     ax.legend()  # Update legend
                     
         except Exception as e:
-            print(f"  ⚠️ Could not plot boundary: {e}")
+            print(f"   Could not plot boundary: {e}")
     
     # Save or show
     if save_path:
@@ -695,7 +704,7 @@ def plot_top_k_worst(points_dict: Dict[str, torch.Tensor],
         if dir_path:  # Only if directory path is not empty
             os.makedirs(dir_path, exist_ok=True)
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        print(f"  💾 Saved worst points plot to {save_path}")
+        print(f"   Saved worst points plot to {save_path}")
     else:
         plt.show()
     
@@ -721,7 +730,7 @@ def visualize_predictions(networks, physics, step: str = "final", save_path: Opt
         step: Training step identifier for plot titles
         save_path: Optional path to save plots
     """
-    print(f"📊 Generating prediction visualization for step {step}...")
+    print(f" Generating prediction visualization for step {step}...")
 
     with torch.no_grad():
         # Define input ranges (all dimensionless)
@@ -729,19 +738,19 @@ def visualize_predictions(networks, physics, step: str = "final", save_path: Opt
         n_temporal = 50
 
         # Fix a representative dimensionless potential for visualization
-        E_hat_fixed = torch.tensor([[0.8 / physics.scales.phic]], device=physics.device)  # Normalized E
+        E_hat_fixed = torch.tensor([[0.8 / physics.scales.phic]], dtype=torch.get_default_dtype(), device=physics.device)  # Normalized E
 
         # Dimensionless time range (0 to 1)
         t_hat_range = torch.linspace(0, physics.domain.time_scale / physics.scales.tc, n_temporal, device=physics.device)
 
         # Get final dimensionless film thickness to set spatial range
-        t_hat_final = torch.tensor([[physics.domain.time_scale / physics.scales.tc]], device=physics.device)
+        t_hat_final = torch.tensor([[physics.domain.time_scale / physics.scales.tc]], dtype=torch.get_default_dtype(), device=physics.device)
         L_hat_final = networks['film_thickness'](torch.cat([t_hat_final, E_hat_fixed], dim=1)).item()
         x_hat_range = torch.linspace(0, L_hat_final, n_spatial, device=physics.device)
 
-        print(f"  📐 Dimensionless time range: [0, 1.0]")
-        print(f"  📐 Dimensionless spatial range: [0, {L_hat_final:.2f}]")
-        print(f"  📐 Fixed dimensionless potential: {E_hat_fixed.item():.3f}")
+        print(f"   Dimensionless time range: [0, 1.0]")
+        print(f"   Dimensionless spatial range: [0, {L_hat_final:.2f}]")
+        print(f"   Fixed dimensionless potential: {E_hat_fixed.item():.3f}")
 
         # Create 2D grid for contour plots
         T_hat_mesh, X_hat_mesh = torch.meshgrid(t_hat_range, x_hat_range, indexing='ij')
@@ -854,14 +863,14 @@ def visualize_predictions(networks, physics, step: str = "final", save_path: Opt
         if save_path:
             os.makedirs(os.path.dirname(save_path), exist_ok=True)
             plt.savefig(save_path, dpi=500, bbox_inches='tight')
-            print(f"  💾 Saved predictions plot to {save_path}")
+            print(f"   Saved predictions plot to {save_path}")
         else:
             plt.show()
 
         plt.close()
 
         # Print dimensionless statistics
-        print(f"\n📈 Dimensionless Prediction Statistics (Step {step}) at Ê={E_hat_fixed.item():.3f}:")
+        print(f"\n Dimensionless Prediction Statistics (Step {step}) at Ê={E_hat_fixed.item():.3f}:")
         print("-" * 60)
         print(
             f"Potential φ̂:          {phi_hat_np.min():.3f} to {phi_hat_np.max():.3f} (mean: {phi_hat_np.mean():.3f})")
@@ -874,7 +883,7 @@ def visualize_predictions(networks, physics, step: str = "final", save_path: Opt
         print(f"Film Thickness L̂:      {L_hat_np.min():.3f} to {L_hat_np.max():.3f}")
 
         # Convert back to dimensional units for reference
-        print(f"\n🔧 Corresponding Dimensional Values:")
+        print(f"\n Corresponding Dimensional Values:")
         print(f"Time scale: {physics.scales.tc:.1e} s")
         print(f"Length scale: {physics.scales.lc:.1e} m")
         print(f"Potential scale: {physics.scales.phic:.3f} V")
@@ -916,15 +925,15 @@ def generate_polarization_curve(networks, physics, n_points: int = 50,
     t_hat_eval = physics.domain.time_scale / physics.scales.tc
 
     
-    print(f"📈 Generating polarization curve at t̂={t_hat_eval}")
+    print(f" Generating polarization curve at t̂={t_hat_eval}")
     with torch.no_grad():
         E_hat_values = torch.linspace(E_hat_min, E_hat_max, n_points, device=physics.device)
         j={'total':[],'j1':[],'j2':[],'j3':[],'jtp':[]}
 
         for E_hat_val in E_hat_values:
             # Use dimensionless quantities throughout
-            t_hat_tensor = torch.tensor([[t_hat_eval]], device=physics.device)
-            E_hat_tensor = torch.tensor([[E_hat_val.item()]], device=physics.device)
+            t_hat_tensor = torch.tensor([[t_hat_eval]], dtype=torch.get_default_dtype(), device=physics.device)
+            E_hat_tensor = torch.tensor([[E_hat_val.item()]], dtype=torch.get_default_dtype(), device=physics.device)
 
             # Get dimensionless film thickness
             L_hat_val = networks['film_thickness'](torch.cat([t_hat_tensor, E_hat_tensor], dim=1))
@@ -984,7 +993,7 @@ def generate_polarization_curve(networks, physics, n_points: int = 50,
         if save_path:
             os.makedirs(os.path.dirname(save_path), exist_ok=True)
             plt.savefig(save_path, dpi=300, bbox_inches='tight')
-            (f"  💾 Saved polarization curve to {save_path}")
+            (f"   Saved polarization curve to {save_path}")
         else:
             plt.show()
 
@@ -1040,9 +1049,9 @@ def plot_training_losses(loss_history: Dict[str, List[float]],
         smoothing_window: Window size for smoothing (must be odd)
         separate_files: If True, create separate files for each plot type
     """
-    print("📉 Creating comprehensive loss plots...")
+    print(" Creating comprehensive loss plots...")
     if smooth:
-        print(f"🔧 Applying smoothing with window size {smoothing_window}")
+        print(f" Applying smoothing with window size {smoothing_window}")
     
     if separate_files:
         _plot_separate_files(loss_history, save_path, smooth, smoothing_window)
@@ -1101,7 +1110,7 @@ def _plot_separate_files(loss_history: Dict[str, List[float]],
         total_path = f"{base_path}_total_loss{suffix}.png"
         os.makedirs(os.path.dirname(total_path), exist_ok=True)
         plt.savefig(total_path, dpi=300, bbox_inches='tight')
-        print(f"  💾 Saved total loss to {total_path}")
+        print(f"   Saved total loss to {total_path}")
     plt.close()
     
     # 2. Main Components
@@ -1122,7 +1131,7 @@ def _plot_separate_files(loss_history: Dict[str, List[float]],
     if base_path:
         main_path = f"{base_path}_main_components{suffix}.png"
         plt.savefig(main_path, dpi=300, bbox_inches='tight')
-        print(f"  💾 Saved main components to {main_path}")
+        print(f"   Saved main components to {main_path}")
     plt.close()
     
     # 3. PDE Residuals
@@ -1142,7 +1151,7 @@ def _plot_separate_files(loss_history: Dict[str, List[float]],
     if base_path:
         pde_path = f"{base_path}_pde_residuals{suffix}.png"
         plt.savefig(pde_path, dpi=300, bbox_inches='tight')
-        print(f"  💾 Saved PDE residuals to {pde_path}")
+        print(f"   Saved PDE residuals to {pde_path}")
     plt.close()
     
     # 4. Boundary Conditions
@@ -1165,7 +1174,7 @@ def _plot_separate_files(loss_history: Dict[str, List[float]],
     if base_path:
         bc_path = f"{base_path}_boundary_conditions{suffix}.png"
         plt.savefig(bc_path, dpi=300, bbox_inches='tight')
-        print(f"  💾 Saved boundary conditions to {bc_path}")
+        print(f"   Saved boundary conditions to {bc_path}")
     plt.close()
     
     # 5. Initial Conditions
@@ -1186,7 +1195,7 @@ def _plot_separate_files(loss_history: Dict[str, List[float]],
     if base_path:
         ic_path = f"{base_path}_initial_conditions{suffix}.png"
         plt.savefig(ic_path, dpi=300, bbox_inches='tight')
-        print(f"  💾 Saved initial conditions to {ic_path}")
+        print(f"   Saved initial conditions to {ic_path}")
     plt.close()
 
 
@@ -1271,7 +1280,7 @@ def _plot_combined_subplots(loss_history: Dict[str, List[float]],
         suffix = "_smoothed" if smooth else ""
         final_path = save_path.replace('.png', f'{suffix}.png')
         plt.savefig(final_path, dpi=500, bbox_inches='tight')
-        print(f"  💾 Saved loss plots to {final_path}")
+        print(f"   Saved loss plots to {final_path}")
     else:
         plt.show()
     
@@ -1280,11 +1289,11 @@ def plot_al_multiplier_distributions(trainer: PINNTrainer, save_path: str = None
     """Plot evolution of total Lagrange multiplier L2 norm (like paper Figure 3 right)"""
 
     if not trainer.use_al or not hasattr(trainer, 'total_multiplier_l2_history'):
-        print("⚠️ No total multiplier history found")
+        print(" No total multiplier history found")
         return
 
     if len(trainer.total_multiplier_l2_history) == 0:
-        print("⚠️ Empty multiplier history")
+        print(" Empty multiplier history")
         return
 
     fig, ax = plt.subplots(figsize=(8, 6))
@@ -1309,7 +1318,7 @@ def plot_al_multiplier_distributions(trainer: PINNTrainer, save_path: str = None
     plt.tight_layout()
     if save_path:
         plt.savefig(f"{save_path}/al_multiplier_l2_evolution.png", dpi=300, bbox_inches='tight')
-        print(f"💾 Saved AL multiplier L2 evolution to {save_path}")
+        print(f" Saved AL multiplier L2 evolution to {save_path}")
     plt.close()
 
 def potential_investigations(networks, physics, config, save_path: Optional[str] = None):
@@ -1317,14 +1326,14 @@ def potential_investigations(networks, physics, config, save_path: Optional[str]
     
      with torch.no_grad():
         E_list = [0.1,0.4,0.6,0.8,1.0,1.2,1.4,1.6,1.8]  # Applied potentials in V
-        E_no_dim = torch.tensor(E_list, device=physics.device).unsqueeze(1)/physics.scales.phic
-        t_hat_fixed = torch.tensor([[physics.domain.time_scale /physics.scales.tc]], device=physics.device)  # Final time in dimensionless units
+        E_no_dim = torch.tensor(E_list, dtype=torch.get_default_dtype(), device=physics.device).unsqueeze(1)/physics.scales.phic
+        t_hat_fixed = torch.tensor([[physics.domain.time_scale /physics.scales.tc]], dtype=torch.get_default_dtype(), device=physics.device)  # Final time in dimensionless units
         inputs = torch.cat([t_hat_fixed.repeat(len(E_list),1), E_no_dim], dim=1)
         L_hat_vals = networks['film_thickness'](inputs).squeeze().cpu().numpy()
         phi_mf_list = []
         phi_fs_list = []
         for E_hat_val in E_no_dim:
-            x_hat_mf = torch.tensor([[0.0]], device=physics.device)  # m/f interface
+            x_hat_mf = torch.tensor([[0.0]], dtype=torch.get_default_dtype(), device=physics.device)  # m/f interface
             x_hat_fs = networks['film_thickness'](torch.cat([t_hat_fixed, E_hat_val.unsqueeze(0)], dim=1))  # f/s interface
             
             input_mf = torch.cat([x_hat_mf, t_hat_fixed, E_hat_val.unsqueeze(0)], dim=1)
@@ -1362,7 +1371,7 @@ def plot_potential_profiles(networks, physics,save_path = None):
     
     with torch.no_grad():
         # Fixed dimensionless potential for comparison
-        E_hat_fixed = torch.tensor([[0.8 / physics.scales.phic]], device=physics.device)
+        E_hat_fixed = torch.tensor([[0.8 / physics.scales.phic]], dtype=torch.get_default_dtype(), device=physics.device)
         
         # Three dimensionless time points: initial, middle, final
         t_hat_final = physics.domain.time_scale / physics.scales.tc  # Convert to dimensionless
@@ -1375,7 +1384,7 @@ def plot_potential_profiles(networks, physics,save_path = None):
         
         for i, (t_hat_val, label) in enumerate(zip(times_hat, time_labels)):
             # Get dimensionless film thickness at this time
-            t_hat_tensor = torch.tensor([[t_hat_val]], device=physics.device)
+            t_hat_tensor = torch.tensor([[t_hat_val]], dtype=torch.get_default_dtype(), device=physics.device)
             L_hat_inputs = torch.cat([t_hat_tensor, E_hat_fixed], dim=1)
             L_hat_current = networks['film_thickness'](L_hat_inputs)
             L_hat_val = L_hat_current.item()
@@ -1412,7 +1421,7 @@ def plot_potential_profiles(networks, physics,save_path = None):
         # Fourth subplot: Compare all three times
         plt.subplot(2, 2, 4)
         for i, (t_hat_val, label) in enumerate(zip(times_hat, time_labels)):
-            t_hat_tensor = torch.tensor([[t_hat_val]], device=physics.device)
+            t_hat_tensor = torch.tensor([[t_hat_val]], dtype=torch.get_default_dtype(), device=physics.device)
             L_hat_inputs = torch.cat([t_hat_tensor, E_hat_fixed], dim=1)
             L_hat_current = networks['film_thickness'](L_hat_inputs)
             L_hat_val = L_hat_current.item()
@@ -1443,6 +1452,56 @@ def plot_potential_profiles(networks, physics,save_path = None):
 
 
 
+def write_pinn_vs_fem_files(trainer: PINNTrainer, save_dir: str) -> None:
+    """Write per-voltage PINN vs FEM comparison text files.
+
+    Outputs {save_dir}/pinn_vs_fem_E{V:.2f}V.txt for each FEM voltage file.
+    Columns: Time[s]  L_PINN[nm]  L_FEM[nm]  RelError[%]
+    No-op when fem_data_dir is missing or empty.
+    """
+    from pathlib import Path
+
+    fem_dir = Path(trainer.config.hybrid.fem_data_dir)
+    if not fem_dir.is_dir():
+        return
+
+    txt_files = sorted(fem_dir.glob("*.txt"))
+    if not txt_files:
+        return
+
+    scales = trainer.physics.scales
+    networks = trainer.networks
+    device = trainer.device
+
+    networks.eval()
+    with torch.no_grad():
+        for txt_file in txt_files:
+            voltage = float(txt_file.stem.split()[0])
+
+            data = np.genfromtxt(txt_file, delimiter='\t', names=True)
+            t_s = data['Times']        # Time/s column
+            L_fem_m = data['Filmthicknessm']   # Filmthickness/m column
+
+            valid = ~(np.isnan(t_s) | np.isnan(L_fem_m))
+            t_s = t_s[valid]
+            L_fem_m = L_fem_m[valid]
+
+            t_hat = torch.tensor(t_s / scales.tc, dtype=torch.get_default_dtype(), device=device).unsqueeze(1)
+            E_hat = torch.full((len(t_s), 1), voltage / scales.phic, dtype=torch.get_default_dtype(), device=device)
+            L_pinn_hat = networks['film_thickness'](torch.cat([t_hat, E_hat], dim=1)).squeeze().cpu().numpy()
+
+            L_pinn_nm = L_pinn_hat * scales.lc * 1e9
+            L_fem_nm = L_fem_m * 1e9
+            rel_err = np.abs(L_pinn_nm - L_fem_nm) / (np.abs(L_fem_nm) + 1e-12) * 100.0
+
+            out_path = os.path.join(save_dir, f"pinn_vs_fem_E{voltage:.2f}V.txt")
+            with open(out_path, 'w') as f:
+                f.write('Time[s]\tL_PINN[nm]\tL_FEM[nm]\tRelError[%]\n')
+                for j in range(len(t_s)):
+                    f.write(f'{t_s[j]:.4f}\t{L_pinn_nm[j]:.6f}\t{L_fem_nm[j]:.6f}\t{rel_err[j]:.4f}\n')
+    networks.train()
+
+
 def analyze_training_results(trainer:PINNTrainer, ntk_weight_manager:NTKWeightManager,save_dir: Optional[str] = None) -> None:
     """
     Complete analysis of training results.
@@ -1453,7 +1512,7 @@ def analyze_training_results(trainer:PINNTrainer, ntk_weight_manager:NTKWeightMa
         trainer: PINNTrainer instance with completed training
         save_dir: Optional directory to save all plots
     """
-    print("🔬 Performing complete training analysis...")
+    print(" Performing complete training analysis...")
 
     if save_dir:
         os.makedirs(save_dir, exist_ok=True)
@@ -1472,7 +1531,7 @@ def analyze_training_results(trainer:PINNTrainer, ntk_weight_manager:NTKWeightMa
         
         # Print AL statistics
         al_stats = trainer.get_al_training_stats()
-        print(f"\n🔗 AL-PINNs Training Summary:")
+        print(f"\n AL-PINNs Training Summary:")
         print(f"  Total multiplier parameters: {al_stats['total_multipliers']}")
         print(f"  Final penalty term: {al_stats.get('final_penalty', 'N/A')}")
         print(f"  Final Lagrangian term: {al_stats.get('final_lagrangian', 'N/A')}")
@@ -1495,7 +1554,7 @@ def analyze_training_results(trainer:PINNTrainer, ntk_weight_manager:NTKWeightMa
 
     # Print training statistics
     stats = trainer.get_training_stats()
-    print(f"\n📊 Training Summary:")
+    print(f"\n Training Summary:")
     print(f"  Steps completed: {stats['current_step']}/{stats['total_steps']}")
     print(f"  Final loss: {stats['final_loss']:.6f}")
     print(f"  Best loss: {stats['best_loss']:.6f}")
@@ -1503,4 +1562,195 @@ def analyze_training_results(trainer:PINNTrainer, ntk_weight_manager:NTKWeightMa
     if stats['training_time_minutes']:
         print(f"  Training time: {stats['training_time_minutes']:.1f} minutes")
 
-    print("✅ Analysis complete!")
+    # Plot collocation-point sampling distribution
+    if hasattr(trainer, 'sampler') and trainer.sampler is not None:
+        plot_sampling_distribution(trainer.sampler, trainer.networks, trainer.physics, save_path=save_dir)
+
+    # Plot film thickness vs time (one figure per voltage)
+    fem_data_dir = getattr(trainer.config.hybrid, 'fem_data_dir', None)
+    plot_film_thickness_vs_time(
+        trainer.networks, trainer.physics,
+        save_dir=save_dir,
+        fem_data_dir=fem_data_dir,
+    )
+
+    # Write per-voltage PINN vs FEM comparison files
+    if save_dir:
+        write_pinn_vs_fem_files(trainer, save_dir)
+
+    print(" Analysis complete!")
+
+
+def plot_sampling_distribution(sampler, networks, physics, save_path: str = None) -> None:
+    """
+    Visualise one snapshot of the collocation-point distribution across the
+    full training domain (x, t, E).
+
+    Produces a 2×3 figure:
+      Row 1 — 2-D projections: (t, E) | (x, t) | (x, E)
+      Row 2 — 1-D histograms : t distribution | E distribution | x distribution
+    """
+    apply_pub_style()
+
+    tc   = physics.scales.tc
+    lc   = physics.scales.lc
+    phic = physics.scales.phic
+
+    def to_phys(x_hat, t_hat, E_hat):
+        x_nm = x_hat.detach().cpu().numpy().ravel() * lc * 1e9
+        t_hr = t_hat.detach().cpu().numpy().ravel() * tc / 3600.0
+        E_V  = E_hat.detach().cpu().numpy().ravel() * phic
+        return x_nm, t_hr, E_V
+
+    with torch.no_grad():
+        xi, ti, Ei    = sampler.sample_interior_points(networks)
+        xb, tb, Eb    = sampler.sample_boundary_points(networks)
+        xic, tic, Eic = sampler.sample_initial_points(networks)
+        tf, Ef        = sampler.sample_film_physics_points()
+        xf            = torch.zeros_like(tf)
+
+    half_b = xb.shape[0] // 2
+    pts = {
+        'Interior': to_phys(xi,          ti,          Ei),
+        'BC m/f':   to_phys(xb[:half_b], tb[:half_b], Eb[:half_b]),
+        'BC f/s':   to_phys(xb[half_b:], tb[half_b:], Eb[half_b:]),
+        'Initial':  to_phys(xic,         tic,         Eic),
+        'Film (L)': to_phys(xf,          tf,          Ef),
+    }
+    colours = {
+        'Interior': 'steelblue',
+        'BC m/f':   'darkorange',
+        'BC f/s':   'seagreen',
+        'Initial':  'crimson',
+        'Film (L)': 'mediumpurple',
+    }
+
+    alpha = 0.25
+    s = 4
+    fig, axes = plt.subplots(2, 3, figsize=(14, 8))
+    fig.suptitle('Collocation-point sampling distribution', fontsize=13)
+    ax_tE, ax_xt, ax_xE = axes[0]
+    ax_th, ax_Eh, ax_xh = axes[1]
+
+    for label, (x_nm, t_hr, E_V) in pts.items():
+        c = colours[label]
+        ax_tE.scatter(t_hr, E_V,  s=s, color=c, alpha=alpha, label=label)
+        ax_xt.scatter(t_hr, x_nm, s=s, color=c, alpha=alpha)
+        ax_xE.scatter(E_V,  x_nm, s=s, color=c, alpha=alpha)
+        ax_th.hist(t_hr, bins=50, color=c, alpha=0.5, density=True)
+        ax_Eh.hist(E_V,  bins=30, color=c, alpha=0.5, density=True)
+        ax_xh.hist(x_nm, bins=50, color=c, alpha=0.5, density=True)
+
+    ax_tE.set_xlabel('Time (hours)'); ax_tE.set_ylabel('Potential (V)')
+    ax_xt.set_xlabel('Time (hours)'); ax_xt.set_ylabel('x (nm)')
+    ax_xE.set_xlabel('Potential (V)'); ax_xE.set_ylabel('x (nm)')
+    ax_th.set_xlabel('Time (hours)'); ax_th.set_ylabel('Density')
+    ax_Eh.set_xlabel('Potential (V)'); ax_Eh.set_ylabel('Density')
+    ax_xh.set_xlabel('x (nm)'); ax_xh.set_ylabel('Density')
+
+    handles, labels = ax_tE.get_legend_handles_labels()
+    ax_tE.legend(handles, labels, markerscale=3, fontsize=7, loc='best')
+    fig.tight_layout()
+
+    if save_path:
+        if not os.path.isfile(save_path):
+            os.makedirs(save_path, exist_ok=True)
+        out = os.path.join(save_path, "sampling_distribution.png") if os.path.isdir(save_path) else save_path
+        fig.savefig(out, dpi=300, bbox_inches='tight')
+        print(f"  Saved {out}")
+    plt.close(fig)
+
+
+def _load_reference_data(data_dir: str) -> dict:
+    """
+    Load tab-separated reference files (FEM or experimental).
+    Expected columns: Time/s  Potential/V  Filmthickness/m
+    Returns {voltage_V: (t_hours_array, L_nm_array)}.
+    """
+    import glob
+    result = {}
+    for fpath in sorted(glob.glob(os.path.join(data_dir, "*.txt"))):
+        try:
+            data = np.loadtxt(fpath, delimiter='\t', skiprows=1)
+            if data.ndim == 1:
+                data = data[np.newaxis, :]
+            t_s = data[:, 0].astype(float)
+            E_V = float(data[0, 1])
+            L_m = data[:, 2].astype(float)
+            result[E_V] = (t_s / 3600.0, L_m * 1e9)   # hours, nm
+        except Exception:
+            pass
+    return result
+
+
+def plot_film_thickness_vs_time(
+    networks,
+    physics,
+    save_dir: str = None,
+    fem_data_dir: str = None,
+    exp_data_dir: str = None,
+    voltages: list = None,
+    n_points: int = 300,
+) -> None:
+    """
+    Plot PINN-predicted film thickness (nm) vs time (hours), one figure per
+    applied potential.  Optionally overlays FEM and/or experimental reference
+    data.
+    """
+    apply_pub_style()
+
+    fem_ref = _load_reference_data(fem_data_dir) if fem_data_dir and os.path.isdir(fem_data_dir) else {}
+    exp_ref = _load_reference_data(exp_data_dir) if exp_data_dir and os.path.isdir(exp_data_dir) else {}
+
+    if voltages is None:
+        if fem_ref:
+            voltages = sorted(fem_ref.keys())
+        elif exp_ref:
+            voltages = sorted(exp_ref.keys())
+        else:
+            voltages = [0.1, 0.4, 1.0, 1.6, 1.8]
+
+    if save_dir:
+        os.makedirs(save_dir, exist_ok=True)
+
+    t_max_s = physics.domain.time_scale
+    t_c     = physics.scales.tc
+    l_c     = physics.scales.lc
+    phi_c   = physics.scales.phic
+
+    t_hat_vals = torch.linspace(0.0, t_max_s / t_c, n_points, device=physics.device)
+    t_hours    = (t_hat_vals.cpu().numpy() * t_c) / 3600.0
+
+    for E_V in voltages:
+        E_hat        = E_V / phi_c
+        E_hat_tensor = torch.full((n_points, 1), E_hat, device=physics.device)
+        t_tensor     = t_hat_vals.unsqueeze(1)
+
+        with torch.no_grad():
+            L_hat = networks['film_thickness'](torch.cat([t_tensor, E_hat_tensor], dim=1)).squeeze().cpu().numpy()
+        L_nm = L_hat * l_c * 1e9
+
+        fig, ax = plt.subplots(figsize=(7, 4.5))
+        ax.plot(t_hours, L_nm, color='steelblue', linewidth=2, label='PINN prediction')
+
+        if E_V in fem_ref:
+            t_fem, L_fem = fem_ref[E_V]
+            ax.plot(t_fem, L_fem, 'k--', linewidth=1.5, label='FEM reference')
+
+        if E_V in exp_ref:
+            t_exp, L_exp = exp_ref[E_V]
+            ax.scatter(t_exp, L_exp, s=30, color='crimson', zorder=5, label='Experimental data')
+
+        ax.set_xlabel('Time (hours)')
+        ax.set_ylabel('Film thickness (nm)')
+        ax.set_title(f'Film Thickness vs Time  —  E = {E_V:.1f} V')
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        fig.tight_layout()
+
+        if save_dir:
+            fname = f"film_thickness_E{E_V:.2f}V.png".replace(' ', '')
+            fpath = os.path.join(save_dir, fname)
+            fig.savefig(fpath, dpi=300, bbox_inches='tight')
+            print(f"  Saved {fpath}")
+        plt.close(fig)

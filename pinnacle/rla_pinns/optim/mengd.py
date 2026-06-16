@@ -62,7 +62,7 @@ class MENGD(Optimizer):
         actual_shape = J.shape
         if expected_shape != actual_shape:
             raise ValueError(f"Jacobian shape mismatch: expected {expected_shape}, got {actual_shape}")
-        print(f"✅ Jacobian validated: {actual_shape}")
+        print(f" Jacobian validated: {actual_shape}")
     
     def _update_parameters(
             self,

@@ -953,9 +953,17 @@ class CollocationSampler:
 
         hybrid = getattr(self.config, 'hybrid', {}) if hasattr(self.config, 'hybrid') else self.config.get('hybrid', {})
         # Anchor count: explicit n_samples wins, then n_data_points, then fem_batch_size.
+        # NB: must use an explicit None check, NOT `n_data_points or ...`, otherwise
+        # n_data_points=0 (pure-physics baseline for E4) silently falls through to
+        # fem_batch_size and trains with one anchor instead of none.
         if n_samples is None:
-            n_samples = int(getattr(hybrid, 'n_data_points', None) or hybrid.get('n_data_points')
-                            or hybrid.get('fem_batch_size', 1))
+            ndp = hybrid.get('n_data_points', None)
+            n_samples = int(ndp) if ndp is not None else int(hybrid.get('fem_batch_size', 1))
+
+        # n_data_points=0 => pure physics, no anchor data.
+        if n_samples <= 0:
+            self.last_fem_data = None
+            return None
 
         total_points = len(self.fem_data['t'])
         anchor_mode = str(hybrid.get('anchor_mode', 'default')).lower()

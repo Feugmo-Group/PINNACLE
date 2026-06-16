@@ -350,7 +350,10 @@ class PINNTrainer:
             x_boundary, t_boundary, E_boundary = self.sampler.sample_boundary_points(self.networks)
             x_initial, t_initial, E_initial = self.sampler.sample_initial_points(self.networks)
             t_film, E_film = self.sampler.sample_film_physics_points()
-            fem_data = self.sampler.sample_fem_data(self.config.hybrid.fem_batch_size) if self.config.hybrid.use_data else None
+            # NB: do NOT pass fem_batch_size here — that silently overrides
+            # hybrid.n_data_points (E4 data-efficiency sweep). Let sample_fem_data
+            # resolve the anchor count from n_data_points (0 => pure physics).
+            fem_data = self.sampler.sample_fem_data() if self.config.hybrid.use_data else None
 
             return (_cast(x_interior), _cast(t_interior), _cast(E_interior),
                 _cast(x_boundary), _cast(t_boundary), _cast(E_boundary),
@@ -444,7 +447,7 @@ class PINNTrainer:
                 t_film, E_film,fem_data,
                 self.networks, self.physics,
                 weights=None,  # Don't use standard weights
-                ntk_weights=self.ntk_weights,Hybrid=self.config.hybrid.use_data  # Use NTK component weights
+                ntk_weights=self.ntk_weights,Hybrid=(self.config.hybrid.use_data and fem_data is not None)  # data term only when anchors exist (N>0)
             )
         else:
             # Use standard weights (uniform, batch_size, manual)
@@ -455,7 +458,7 @@ class PINNTrainer:
                 t_film, E_film, fem_data,
                 self.networks, self.physics,
                 weights=self.loss_weights,
-                ntk_weights=None,Hybrid=self.config.hybrid.use_data  # Use standard weights
+                ntk_weights=None,Hybrid=(self.config.hybrid.use_data and fem_data is not None)  # data term only when anchors exist (N>0)
             )
 
         # Inverse-problem observation loss (paper revision E6).
@@ -552,6 +555,19 @@ class PINNTrainer:
             return {k: float(v.item()) if hasattr(v, 'item') else float(v)
                     for k, v in loss_dict.items()}
         total_loss.backward()
+
+        # Stage 2 of inverse training: networks are frozen; only k3_0/D_cv are updated.
+        # Zero out all network gradients so only the inverse param group gets a step.
+        if self.inverse_enabled:
+            inverse_cfg = self.config.get('inverse', {}) if hasattr(self.config, 'get') else {}
+            stage2_start = int(inverse_cfg.get('stage2_start_step', float('inf')))
+            if self.current_step >= stage2_start:
+                if not getattr(self, '_stage2_announced', False):
+                    print(f"\n[Step {self.current_step}] Inverse Stage 2: networks frozen, optimising k3_0/D_cv only")
+                    self._stage2_announced = True
+                for p in self.networks.get_all_parameters():
+                    if p.grad is not None:
+                        p.grad.zero_()
 
         torch.nn.utils.clip_grad_norm_(self.networks.get_all_parameters(), max_norm=0.1)
 
@@ -748,7 +764,8 @@ class PINNTrainer:
             checkpoint['ntk_batch_sizes'] = self.ntk_manager.optimal_batch_sizes
 
         # Add hybrid data point info if using hybrid training
-        if self.config.hybrid.use_data and hasattr(self.sampler, 'last_fem_data'):
+        if (self.config.hybrid.use_data and hasattr(self.sampler, 'last_fem_data')
+                and self.sampler.last_fem_data is not None):
             checkpoint['hybrid_data_point'] = {
                 't': self.sampler.last_fem_data['t'].cpu().numpy() if torch.is_tensor(self.sampler.last_fem_data['t']) else self.sampler.last_fem_data['t'],
                 'E': self.sampler.last_fem_data['E'].cpu().numpy() if torch.is_tensor(self.sampler.last_fem_data['E']) else self.sampler.last_fem_data['E'],
@@ -765,13 +782,27 @@ class PINNTrainer:
         Args:
             checkpoint_path: Path to checkpoint file
         """
-        checkpoint = torch.load(checkpoint_path, map_location=self.device,weights_only=False)
+        checkpoint = torch.load(checkpoint_path, map_location=self.device, weights_only=False)
 
         self.networks.load_state_dict(checkpoint['networks'])
         self.optimizer.load_state_dict(checkpoint['optimizer'])
 
-        if self.scheduler and checkpoint['scheduler']:
+        if self.scheduler and checkpoint.get('scheduler'):
             self.scheduler.load_state_dict(checkpoint['scheduler'])
+
+        # Restore training state so the loop resumes from where it stopped
+        if 'step' in checkpoint:
+            self.current_step = int(checkpoint['step'])
+        if 'best_loss' in checkpoint:
+            self.best_loss = checkpoint['best_loss']
+        if 'loss_history' in checkpoint:
+            self.loss_history = checkpoint['loss_history']
+        if 'ntk_current_weights' in checkpoint and self.ntk_manager is not None:
+            self.ntk_manager.current_weights = checkpoint['ntk_current_weights']
+        if 'ntk_batch_sizes' in checkpoint and self.ntk_manager is not None:
+            self.ntk_manager.optimal_batch_sizes = checkpoint['ntk_batch_sizes']
+
+        print(f" Resumed from checkpoint: step={self.current_step}, best_loss={self.best_loss:.6g}")
 
 
     def handle_checkpointing(self, current_loss: float) -> None:
@@ -817,7 +848,24 @@ class PINNTrainer:
         Returns:
             Complete loss history for analysis
         """
+        # Resume from checkpoint if specified
+        resume_path = self.config.get('training', {}).get('resume_checkpoint', None)
+        if resume_path:
+            import os as _os
+            if _os.path.isfile(resume_path):
+                print(f" Loading resume checkpoint: {resume_path}")
+                self.load_checkpoint(resume_path)
+            else:
+                print(f" WARNING: resume_checkpoint path not found: {resume_path} — starting fresh")
+
+        remaining_steps = self.max_steps - self.current_step
+        if remaining_steps <= 0:
+            print(f" Already completed {self.current_step}/{self.max_steps} steps — nothing to do.")
+            return self.loss_history
+
         print(f" Starting PINNACLE training for {self.max_steps} steps...")
+        if self.current_step > 0:
+            print(f"  Resuming from step {self.current_step} ({remaining_steps} steps remaining)")
         print(f"  Using {self.weighting_strategy} loss weighting strategy")
 
         # Start timing
@@ -833,8 +881,9 @@ class PINNTrainer:
         step_ms: List[float] = []
         peak_mem_mb: List[float] = []
 
-        # Main training loop
-        for step in tqdm(range(self.max_steps), desc="Training Progress"):
+        # Main training loop — start from current_step to support resume
+        for step in tqdm(range(self.current_step, self.max_steps), desc="Training Progress",
+                         initial=self.current_step, total=self.max_steps):
             if use_cuda:
                 start_ev.record()
             else:

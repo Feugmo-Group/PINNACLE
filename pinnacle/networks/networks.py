@@ -361,7 +361,7 @@ class NetworkManager:
         for network in self.networks.values():
             network.to(self.device).train()
 
-        print(f"✅ Networks exported to {save_path}")
+        print(f" Networks exported to {save_path}")
 
     def __getitem__(self, key: str) -> nn.Module:
         """Allow dict-like access to networks"""

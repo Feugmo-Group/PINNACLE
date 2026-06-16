@@ -90,6 +90,7 @@ training:
   ntk_start_step: 0
   ntk_steps: 20000
   physics_steps: 100
+  resume_checkpoint: null  # path to .pt checkpoint to resume from (e.g. outputs/.../checkpoints/model_step_30000.pt)
 hybrid:
   fem_data_dir: "pinnacle/FEM"
   fem_batch_size: 1
@@ -143,6 +144,7 @@ inverse:
   obs_voltages: [0.1]       # observed voltages; e.g. [0.1] or [0.1, 1.0]
   obs_noise_sigma: 0.0      # Gaussian multiplicative noise on observations
   lr_params: 1.0e-4         # separate Adam lr for the physics params
+  stage2_start_step: 40000  # freeze networks at this step; only k3_0/D_cv optimised after this
 # Batch sizes for different constraints
 batch_size:
   BC: 1024 # Boundary points per boundary
