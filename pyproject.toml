@@ -3,26 +3,34 @@ name = "pinnacle"
 version = "0.1.0"
 description = "Physics Informed Neural Networks Analyzing Corrosion Layers in Electrochemistry"
 authors = [
-    {name = "Mafuoso",email = "mu2faroo@uwaterloo.ca"}
+    {name = "Mohid Farooqi", email = "mu2faroo@uwaterloo.ca"},
+    {name = "Ingmar Bosing"},
+    {name = "Conrard Giresse Tetsassi Feugmo", email = "cgtetsas@uwaterloo.ca"},
 ]
 license = {text = "MIT"}
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
 dependencies = [
-    "torch (>=2.8.0,<3.0.0)",
-    "torchvision (>=0.23.0,<0.24.0)",
-    "matplotlib (>=3.10.6,<4.0.0)",
-    "numpy (>=2.3.2,<3.0.0)",
-    "scipy (>=1.16.1,<2.0.0)",
-    "tqdm (>=4.67.1,<5.0.0)",
-    "hessianfree (>=0.4.0,<0.5.0)",
-    "hydra-core (>=1.3,<2.0)",
-    "omegaconf (>=2.3,<3.0)",
-    "pandas (>=2.0,<3.0)",
-    "hydra-colorlog (>=1.2,<2.0)"
+    "torch>=2.8.0,<3.0.0",
+    "torchvision>=0.23.0,<0.24.0",
+    "matplotlib>=3.10.0,<4.0.0",
+    "numpy>=2.0.0,<3.0.0",
+    "scipy>=1.13.0,<2.0.0",
+    "tqdm>=4.66.0,<5.0.0",
+    "hessianfree>=0.4.0,<0.5.0",
+    "hydra-core>=1.3,<2.0",
+    "omegaconf>=2.3,<3.0",
+    "pandas>=2.0,<3.0",
+    "hydra-colorlog>=1.2,<2.0",
 ]
 
-
 [build-system]
-requires = ["poetry-core>=2.0.0,<3.0.0"]
-build-backend = "poetry.core.masonry.api"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["pinnacle"]
+
+[tool.uv]
+# GPU wheels — change index suffix for your CUDA version (cu118, cu121, cu124, cpu)
+# uv sync --extra-index-url https://download.pytorch.org/whl/cu124
